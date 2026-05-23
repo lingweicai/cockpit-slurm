@@ -1,4 +1,4 @@
-# define JSON data model for the project
+# Define JSON data model for the project
 
 The JSON data model should become the canonical contract layer shared by both:
 
