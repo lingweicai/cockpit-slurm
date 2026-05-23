@@ -1,3 +1,5 @@
+# Introduction (2026)
+
 A good direction for your [cockpit-slurm project](https://github.com/lingweicai/cockpit-slurm?utm_source=chatgpt.com) is to evolve from a simple Cockpit frontend plugin into a layered HPC management platform with:
 
 * PatternFly React frontend
@@ -19,11 +21,7 @@ The recommended starting point remains the official [cockpit-project/starter-kit
 * CI/testing scaffolding
 * Development watch mode ([GitHub][2])
 
----
-
 # Updated Development Plan for cockpit-slurm (2026)
-
----
 
 # 0. Project Vision
 
@@ -38,8 +36,6 @@ Build a modern web-based HPC cluster management platform for Slurm using:
 * Event-driven updates
 * Streaming APIs
 * HA-ready architecture
-
----
 
 # 1. Recommended High-Level Architecture
 
@@ -118,8 +114,6 @@ Build a modern web-based HPC cluster management platform for Slurm using:
 └───────────────┘   └────────────────┘   └──────────────────┘
 ```
 
----
-
 # 2. Repository Structure
 
 Start from:
@@ -171,8 +165,6 @@ cockpit-slurm/
 └── scripts/
 ```
 
----
-
 # 3. Development Phases
 
 ---
@@ -207,8 +199,6 @@ git grep -i starter
 ```
 
 (as recommended by Cockpit docs) ([GitHub][2])
-
----
 
 # Phase 1 — Frontend MVP
 
@@ -248,8 +238,6 @@ This aligns with the refactoring direction you already started using:
 * reusable cards
 * modal-driven UX
 
----
-
 # Phase 2 — Data Model Standardization
 
 This is extremely important.
@@ -269,8 +257,6 @@ Priority:
 2. Slurm CLI semantics/manual
 3. Slurm REST/OpenAPI
 4. DB schema only for accounting internals
-
----
 
 # Core Entities
 
@@ -298,8 +284,6 @@ Priority:
 
 ## Federation
 
----
-
 # Phase 3 — Go Bridge Daemon
 
 ## Most important architectural transition
@@ -321,8 +305,6 @@ React
 
 This is the correct scalable architecture.
 
----
-
 # Why Persistent Daemon?
 
 ## Benefits
@@ -337,25 +319,17 @@ squeue
 sacctmgr
 ```
 
----
-
 ### 2. Event streaming
 
 Push updates instead of polling.
-
----
 
 ### 3. Better performance
 
 Large clusters become manageable.
 
----
-
 ### 4. Shared state
 
 Multiple browser sessions reuse same backend state.
-
----
 
 ### 5. Future HA support
 
@@ -364,8 +338,6 @@ Bridge can later become:
 * clustered
 * distributed
 * API server
-
----
 
 # Phase 4 — Event System
 
@@ -378,8 +350,6 @@ PARTITION_UPDATED
 RESERVATION_UPDATED
 USER_UPDATED
 ```
-
----
 
 # Recommended Event Flow
 
@@ -394,8 +364,6 @@ websocket/channel stream
         ↓
 React context updates
 ```
-
----
 
 # Phase 5 — RBAC and Security
 
@@ -413,15 +381,11 @@ React context updates
 
 ### audit logging
 
----
-
 # Recommended Socket
 
 ```text
 /run/cockpit-slurm/bridge.sock
 ```
-
----
 
 # Recommended systemd Units
 
@@ -438,8 +402,6 @@ cockpit-slurm-bridge.socket
 ```
 
 You previously asked about `.service` vs `.socket`; this is exactly where socket activation becomes valuable.
-
----
 
 # Phase 6 — Advanced Features
 
@@ -467,8 +429,6 @@ You previously asked about `.service` vs `.socket`; this is exactly where socket
 
 ### Notification system
 
----
-
 # Phase 7 — HA / Enterprise Architecture
 
 Future evolution:
@@ -488,7 +448,6 @@ Potential future:
 * OpenTelemetry
 * Kubernetes deployment
 
----
 
 # Recommended Technology Stack
 
@@ -517,8 +476,6 @@ cockpit.spawn(["sinfo"])
 ```
 
 everywhere in components.
-
----
 
 ## Prefer
 
@@ -549,8 +506,6 @@ You already started moving toward this architecture with:
 
 That is the correct direction.
 
----
-
 # Recommended Go Backend Modules
 
 ```text
@@ -566,8 +521,6 @@ internal/
  ├── channels/
  └── metrics/
 ```
-
----
 
 # Recommended Initial Milestones
 
@@ -599,8 +552,6 @@ Multi-cluster support
 
 Enterprise packaging + HA
 
----
-
 # Recommended First 90 Days
 
 ## Month 1
@@ -611,8 +562,6 @@ Enterprise packaging + HA
 * models
 * CI/CD
 
----
-
 ## Month 2
 
 * Go daemon
@@ -620,16 +569,12 @@ Enterprise packaging + HA
 * channel proxy
 * cache layer
 
----
-
 ## Month 3
 
 * event streaming
 * React hooks/providers
 * live updates
 * RBAC/security
-
----
 
 # Strategic Recommendation
 
