@@ -1,6 +1,6 @@
 # Introduction (2026)
 
-A good direction for your [cockpit-slurm project](https://github.com/lingweicai/cockpit-slurm?utm_source=chatgpt.com) is to evolve from a simple Cockpit frontend plugin into a layered HPC management platform with:
+A good direction for your [cockpit-slurm project](https://github.com/lingweicai/cockpit-slurm) is to evolve from a simple Cockpit frontend plugin into a layered HPC management platform with:
 
 * PatternFly React frontend
 * Cockpit transport/API layer
@@ -12,7 +12,7 @@ A good direction for your [cockpit-slurm project](https://github.com/lingweicai/
 
 This matches Cockpit’s philosophy of “using existing Linux APIs and tools instead of reinventing subsystems.” ([Reddit][1])
 
-The recommended starting point remains the official [cockpit-project/starter-kit](https://github.com/cockpit-project/starter-kit?utm_source=chatgpt.com) template, which already includes:
+The recommended starting point remains the official [cockpit-project/starter-kit](https://github.com/cockpit-project/starter-kit) template, which already includes:
 
 * React + PatternFly setup
 * Cockpit integration
@@ -118,7 +118,7 @@ Build a modern web-based HPC cluster management platform for Slurm using:
 
 Start from:
 
-[cockpit-project/starter-kit](https://github.com/cockpit-project/starter-kit?utm_source=chatgpt.com)
+[cockpit-project/starter-kit](https://github.com/cockpit-project/starter-kit)
 
 Then evolve into:
 
@@ -610,5 +610,5 @@ is the right foundation for eventually turning cockpit-slurm into:
 * an enterprise HPC management platform
 * or even a commercial product around OpenHPC + Slurm.
 
-[1]: https://www.reddit.com/r/linux/comments/p2v0te?utm_source=chatgpt.com "Cockpit 250 — Cockpit Project"
-[2]: https://github.com/cockpit-project/starter-kit?utm_source=chatgpt.com "GitHub - cockpit-project/starter-kit: Everything you need to develop, test and deploy your own cockpit plugin"
+[1]: https://www.reddit.com/r/linux/comments/p2v0te "Cockpit 250 — Cockpit Project"
+[2]: https://github.com/cockpit-project/starter-kit "GitHub - cockpit-project/starter-kit: Everything you need to develop, test and deploy your own cockpit plugin"

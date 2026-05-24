@@ -6,15 +6,24 @@ Scaffolding for a [Cockpit](https://cockpit-project.org/) module.
 
 On Debian/Ubuntu:
 
-    sudo apt install gettext nodejs npm make
+    sudo apt install gettext nodejs npm make golang-go
 
 On Fedora:
 
-    sudo dnf install gettext nodejs npm make
+    sudo dnf install gettext nodejs npm make golang
 
 On openSUSE Tumbleweed and Leap:
 
-    sudo zypper in gettext-runtime nodejs npm make
+    sudo zypper in gettext-runtime nodejs npm make go
+
+This repository also includes a Go backend, so the Go toolchain and an editor language server are recommended.
+
+After installing Go, configure the module proxy and install `gopls` locally:
+
+    go env -w GOPROXY=https://goproxy.io,direct
+    go install golang.org/x/tools/gopls@latest
+
+These commands are local environment setup and are not tracked by the repository.
 
 # Getting and building the source
 

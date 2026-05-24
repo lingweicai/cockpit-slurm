@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft/2020-12/schema#",
+  "title": "SinfoPartitionRow",
+  "description": "Canonical JSON schema for Slurm sinfo partition rows and expandable details.",
+  "type": "object",
+  "properties": {
+    "partition_name": { "type": "string" },
+    "availability": { "type": "string" },
+    "time_limit": { "type": "string", "description": "Human-readable maximum wall clock time for the partition." },
+    "nodes_total": { "type": "integer" },
+    "nodes_allocated": { "type": "integer" },
+    "nodes_idle": { "type": "integer" },
+    "nodes_other": { "type": "integer" },
+    "node_state": { "type": "string" },
+    "node_list": { "type": "string" },
+    "cpus_total": { "type": "integer" },
+    "cpus_allocated": { "type": "integer" },
+    "cpus_idle": { "type": "integer" },
+    "cpus_other": { "type": "integer" },
+    "memory_free_min": { "type": "integer" },
+    "memory_free_max": { "type": "integer" },
+    "memory_allocated": { "type": "integer" },
+    "reason_description": { "type": "string" },
+    "reason_user": { "type": "string" },
+    "reason_time": { "type": "integer" },
+    "comment": { "type": "string" },
+    "reservation": { "type": "string" },
+    "partition_state": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "partition_tres": { "type": "string" },
+    "features_active": { "type": "string" },
+    "gres_used": { "type": "string" },
+    "raw": { "type": ["object", "null"], "description": "Raw sinfo JSON output for expandable row details." }
+  },
+  "required": [
+    "partition_name",
+    "availability",
+    "nodes_total",
+    "node_state",
+    "node_list"
+  ]
+}
