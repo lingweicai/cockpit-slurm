@@ -55,23 +55,32 @@ Build a modern web-based HPC cluster management platform for Slurm using:
 ┌─────────────────────────────────────────────────────────────┐
 │                       Cockpit Web Service                   │
 │                                                             │
-│                     cockpit-ws / cockpit-bridge             │
-└─────────────────────────────────────────────────────────────┘
-                              │
-          ┌───────────────────┴───────────────────┐
-          │                                       │
-          ▼                                       ▼
+### Template / Repository setup
 
-┌──────────────────────┐              ┌────────────────────────┐
-│ Cockpit React Plugin │              │ cockpit.channel() API  │
-│  (Frontend Package)  │              │ Stream/Event Transport │
-└──────────────────────┘              └────────────────────────┘
-                                                  │
-                                                  │ JSON Messages
-                                                  ▼
+If you are starting from the upstream template you can review it at:
 
-┌─────────────────────────────────────────────────────────────┐
-│               cockpit-slurm-channel helper                 │
+[cockpit-project/starter-kit](https://github.com/cockpit-project/starter-kit)
+
+If you already have a project repository, clone your project instead of
+the template. Example for this repo:
+
+```bash
+git clone https://github.com/lingweicai/cockpit-slurm.git
+cd cockpit-slurm
+```
+
+### Initial Repository Structure
+
+```text
+cockpit-slurm/
+├── src/
+├── bridge/
+├── channel/
+├── models/
+├── schemas/
+├── docs/
+└── packaging/
+```
 │                                                             │
 │ Small proxy executable launched by Cockpit                 │
 │                                                             │
@@ -116,11 +125,12 @@ Build a modern web-based HPC cluster management platform for Slurm using:
 
 # 2. Repository Structure
 
-Start from:
+Originally bootstrapped from the cockpit starter-kit template:
 
-[cockpit-project/starter-kit](https://github.com/cockpit-project/starter-kit)
+[cockpit-project/starter-kit](https://github.com/cockpit-project/starter-kit) (template)
 
-Then evolve into:
+This repository has been adapted into the project `cockpit-slurm` and should
+evolve as a standalone project rather than a direct template mirror. Then evolve into:
 
 ```text
 cockpit-slurm/
@@ -173,8 +183,8 @@ cockpit-slurm/
 
 ## Goals
 
-* Fork starter-kit
-* Rename package
+* Initialize repository (fork or clone your project)
+* Rename package (if needed)
 * Setup CI/CD
 * Setup coding standards
 * Setup TypeScript models
@@ -184,9 +194,11 @@ cockpit-slurm/
 
 ### GitHub Repository
 
+If you are starting from the upstream template, review the starter-kit
+template first. Otherwise clone your project repository directly:
+
 ```bash
-git clone https://github.com/cockpit-project/starter-kit.git
-mv starter-kit cockpit-slurm
+git clone https://github.com/lingweicai/cockpit-slurm.git
 ```
 
 ### Rename identifiers
@@ -556,7 +568,7 @@ Enterprise packaging + HA
 
 ## Month 1
 
-* fork starter-kit
+* start from template (optional)
 * repo structure
 * dashboard MVP
 * models

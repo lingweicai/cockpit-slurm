@@ -134,10 +134,14 @@ Initialize repository and engineering standards.
 
 ## Tasks
 
-### Fork starter-kit
+### Template (optional)
 
-Use:
+This project was originally bootstrapped from the Cockpit starter-kit
+template. If you want to inspect the template, see:
+
 [cockpit-project/starter-kit](https://github.com/cockpit-project/starter-kit)
+
+If you already have a project repository, clone it directly instead of the template.
 
 ### Initial Repository Structure
 

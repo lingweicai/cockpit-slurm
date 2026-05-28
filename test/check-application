@@ -14,20 +14,10 @@ import testlib
 class TestApplication(testlib.MachineCase):
     def testBasic(self):
         b = self.browser
-        m = self.machine
 
-        self.login_and_go("/starter-kit")
+        self.login_and_go("/cockpit-slurm")
         # verify expected heading
-        b.wait_text(".pf-v6-c-card__title", "Starter Kit")
-
-        # verify expected host name
-        hostname = m.execute("cat /etc/hostname").strip()
-        b.wait_in_text(".pf-v6-c-alert__title", "Running on " + hostname)
-
-        # change current hostname
-        self.write_file("/etc/hostname", "new-" + hostname)
-        # verify new hostname name
-        b.wait_in_text(".pf-v6-c-alert__title", "Running on new-" + hostname)
+        b.wait_text(".pf-v6-c-card__title", "Sinfo partitions")
 
         # change language to German
         b.switch_to_top()
@@ -38,15 +28,14 @@ class TestApplication(testlib.MachineCase):
         b.click("#display-language-modal [data-value='de-de'] button")
         b.click("#display-language-modal button.pf-m-primary")
         b.wait_visible("#content")
-        # menu label (from manifest) should be translated
-        b.wait_text("#host-apps a[href='/starter-kit']", "Bausatz")
-        # window title should be translated; this is not considered as "visible"
-        self.assertIn("Bausatz", b.call_js_func("ph_text", "head title"))
+        # menu label (from manifest) should be visible with the project name
+        b.wait_text("#host-apps a[href='/cockpit-slurm']", "Cockpit SLURM")
+        # window title should reflect the project name
+        self.assertIn("Cockpit SLURM", b.call_js_func("ph_text", "head title"))
 
-        b.go("/starter-kit")
-        b.enter_page("/starter-kit")
-        # page label (from js) should be translated
-        b.wait_in_text(".pf-v6-c-alert__title", "Läuft auf")
+        b.go("/cockpit-slurm")
+        b.enter_page("/cockpit-slurm")
+        b.wait_text(".pf-v6-c-card__title", "Sinfo partitions")
 
 
 if __name__ == '__main__':
