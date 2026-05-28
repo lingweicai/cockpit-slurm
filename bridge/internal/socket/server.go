@@ -66,6 +66,10 @@ func (s *Server) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen unix socket: %w", err)
 	}
+	if err := os.Chmod(s.socketPath, 0666); err != nil {
+		listener.Close()
+		return fmt.Errorf("set socket permissions: %w", err)
+	}
 	s.listener = listener
 
 	go s.runEventLoop(ctx)

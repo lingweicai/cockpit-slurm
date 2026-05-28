@@ -1,0 +1,18 @@
+[Unit]
+Description=Cockpit Slurm bridge
+After=network.target
+
+[Service]
+Type=simple
+User=cockpit-slurm
+Group=cockpit-slurm
+RuntimeDirectory=cockpit-slurm
+RuntimeDirectoryMode=0755
+ExecStart=/usr/local/bin/cockpit-slurm-bridge
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
