@@ -172,13 +172,13 @@ export const Application = () => {
         <Card>
             <CardTitle>{_('Sinfo partitions')}</CardTitle>
             <CardBody>
+                <p> test </p>
                 {loading && !rows.length && (
                     <>
                         <Alert variant="info" title={_('Loading sinfo data from the bridge cache...')} />
                         {waitMessage && <p>{waitMessage}</p>}
                     </>
                 )}
-
                 {error && (
                     <Alert variant="danger" title={_('Unable to load sinfo data')}>
                         {error}

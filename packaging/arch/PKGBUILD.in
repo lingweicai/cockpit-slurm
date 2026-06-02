@@ -8,6 +8,8 @@ license=(LGPL)
 source=("SOURCE")
 sha256sums=('SKIP')
 
+makedepends=('go' 'make')
+
 package() {
   depends=(cockpit)
   cd $pkgname

@@ -88,10 +88,20 @@ type SinfoCachePayload = {
   rows: SinfoPartitionRow[];
   updated_at: string;
 };
+// below function is error
+// function openSinfoChannel() {
+//  return cockpit.channel(SOCKET_PATH);
+// }
+// please refer to cockpit.channel() for the correct parameter. https://cockpit-project.org/guide/latest/development.html#cockpit-channels-channel , and refer to the file of "/home/user/cockpit-slurm/development_for_bridge v1.md" for the architect of bridge/channel in backend and sample code for front-end.  
 
-function openSinfoChannel() {
-  return cockpit.channel(SOCKET_PATH);
-}
+import cockpit from "cockpit";
+
+const channel = cockpit.channel({
+    payload: "stream",
+    spawn: [
+        "/usr/libexec/cockpit-slurm/cockpit-slurm-channel"
+    ]
+});
 
 export async function fetchSinfo(): Promise<SinfoCachePayload> {
   const channel = openSinfoChannel();

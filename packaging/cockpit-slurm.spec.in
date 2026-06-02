@@ -24,6 +24,7 @@ BuildRequires: appstream-glib
 BuildRequires: libappstream-glib
 %endif
 BuildRequires: gettext
+BuildRequires: go
 %if 0%{?rhel} && 0%{?rhel} <= 8
 BuildRequires: libappstream-glib-devel
 %endif
@@ -73,5 +74,6 @@ appstream-util validate-relax --nonet %{buildroot}/%{_datadir}/metainfo/*
 %license LICENSE dist/index.js.LEGAL.txt
 %{_datadir}/cockpit/*
 %{_datadir}/metainfo/*
+%{_libexecdir}/cockpit-slurm/cockpit-slurm-channel
 
 %changelog

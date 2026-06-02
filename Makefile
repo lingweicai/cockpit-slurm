@@ -17,12 +17,13 @@ NODE_MODULES_TEST=package-lock.json
 # build.js ran in non-watch mode
 DIST_TEST=runtime-npm-modules.txt
 BRIDGE_BINARY=bridge/cockpit-slurm-bridge
+CHANNEL_BINARY=channel/cockpit-slurm-channel
 # one example file in pkg/lib to check if it was already checked out
 COCKPIT_REPO_STAMP=pkg/lib/cockpit-po-plugin.js
 # common arguments for tar, mostly to make the generated tarballs reproducible
 TAR_ARGS = --sort=name --mtime "@$(shell git show --no-patch --format='%at')" --mode=go=rX,u+rw,a-s --numeric-owner --owner=0 --group=0
 
-all: $(DIST_TEST) $(BRIDGE_BINARY)
+all: $(DIST_TEST) $(BRIDGE_BINARY) $(CHANNEL_BINARY)
 
 # checkout common files from Cockpit repository required to build this project;
 # this has no API stability guarantee, so check out a stable tag when you start
@@ -92,6 +93,9 @@ $(DIST_TEST): $(NODE_MODULES_TEST) $(COCKPIT_REPO_STAMP) $(shell find src/ -type
 $(BRIDGE_BINARY): bridge/go.mod $(shell find bridge -type f)
 	cd bridge && go build -o $(abspath $(BRIDGE_BINARY)) ./cmd/cockpit-slurm-bridge
 
+$(CHANNEL_BINARY): channel/go.mod $(shell find channel -name '*.go' -o -name 'go.mod' -o -name 'go.sum')
+	cd channel && go build -o $(abspath $(CHANNEL_BINARY)) ./cmd/cockpit-slurm-channel
+
 watch: $(NODE_MODULES_TEST) $(COCKPIT_REPO_STAMP)
 	NODE_ENV=$(NODE_ENV) ./build.js --watch
 
@@ -100,15 +104,17 @@ clean:
 	rm -f $(SPEC) packaging/arch/PKGBUILD
 	rm -f po/LINGUAS
 	rm -f metafile.json runtime-npm-modules.txt
-	rm -f $(BRIDGE_BINARY)
+	rm -f $(BRIDGE_BINARY) $(CHANNEL_BINARY)
 
-install: $(DIST_TEST) po/LINGUAS
+install: $(DIST_TEST) po/LINGUAS $(CHANNEL_BINARY)
 	mkdir -p $(DESTDIR)$(PREFIX)/share/cockpit/$(PACKAGE_NAME)
 	cp -r dist/* $(DESTDIR)$(PREFIX)/share/cockpit/$(PACKAGE_NAME)
 	mkdir -p $(DESTDIR)$(PREFIX)/share/metainfo/
 	msgfmt --xml -d po \
 		--template $(APPSTREAMFILE) \
 		-o $(DESTDIR)$(PREFIX)/share/metainfo/$(APPSTREAMFILE)
+	mkdir -p $(DESTDIR)$(PREFIX)/libexec/cockpit-slurm
+	install -m 755 $(CHANNEL_BINARY) $(DESTDIR)$(PREFIX)/libexec/cockpit-slurm/
 
 # this requires a built source tree and avoids having to install anything system-wide
 devel-install: $(DIST_TEST)
