@@ -36,3 +36,6 @@
 /test/common/
 /test/images/
 /test/static-code
+# executable
+/bridge/cockpit-slurm-bridge
+/channel/cockpit-slurm-channel
