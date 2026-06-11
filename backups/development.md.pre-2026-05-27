@@ -1,0 +1,25 @@
+(backup of development.md)
+
+
+# Introduction (2026)
+
+A good direction for your [cockpit-slurm project](https://github.com/lingweicai/cockpit-slurm) is to evolve from a simple Cockpit frontend plugin into a layered HPC management platform with:
+
+* PatternFly React frontend
+* Cockpit transport/API layer
+* Go backend bridge daemon
+* Unix socket IPC
+* Slurm CLI abstraction + cache/event system
+* Optional future REST/gRPC API
+* HA-ready architecture
+
+This matches Cockpit’s philosophy of “using existing Linux APIs and tools instead of reinventing subsystems.” ([Reddit][1])
+
+The recommended starting point remains the official [cockpit-project/starter-kit](https://github.com/cockpit-project/starter-kit) template, which already includes:
+
+* React + PatternFly setup
+* Cockpit integration
+* Build system
+* RPM packaging
+* CI/testing scaffolding
+* Development watch mode ([GitHub][2])

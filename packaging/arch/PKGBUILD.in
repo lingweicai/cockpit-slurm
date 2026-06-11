@@ -1,12 +1,14 @@
-pkgname=cockpit-starter-kit
+pkgname=cockpit-slurm
 pkgver=VERSION
 pkgrel=1
-pkgdesc='Cockpit Starter Kit Example Module'
+pkgdesc='Cockpit SLURM Example Module'
 arch=('x86_64')
-url='https://github.com/cockpit-project/starter-kit'
+url='https://github.com/lingweicai/cockpit-slurm'
 license=(LGPL)
 source=("SOURCE")
 sha256sums=('SKIP')
+
+makedepends=('go' 'make')
 
 package() {
   depends=(cockpit)

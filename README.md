@@ -1,28 +1,37 @@
-# Cockpit Starter Kit
+# Cockpit SLURM
 
-Scaffolding for a [Cockpit](https://cockpit-project.org/) module.
+A [Cockpit](https://cockpit-project.org/) module for managing Slurm state.
 
 # Development dependencies
 
 On Debian/Ubuntu:
 
-    sudo apt install gettext nodejs npm make
+    sudo apt install gettext nodejs npm make golang-go
 
 On Fedora:
 
-    sudo dnf install gettext nodejs npm make
+    sudo dnf install gettext nodejs npm make golang
 
 On openSUSE Tumbleweed and Leap:
 
-    sudo zypper in gettext-runtime nodejs npm make
+    sudo zypper in gettext-runtime nodejs npm make go
+
+This repository also includes a Go backend, so the Go toolchain and an editor language server are recommended.
+
+After installing Go, configure the module proxy and install `gopls` locally:
+
+    go env -w GOPROXY=https://goproxy.io,direct
+    go install golang.org/x/tools/gopls@latest
+
+These commands are local environment setup and are not tracked by the repository.
 
 # Getting and building the source
 
 These commands check out the source and build it into the `dist/` directory:
 
 ```
-git clone https://github.com/cockpit-project/starter-kit.git
-cd starter-kit
+git clone https://github.com/lingweicai/cockpit-slurm.git
+cd cockpit-slurm
 make
 ```
 
@@ -42,7 +51,7 @@ this manually:
 
 ```
 mkdir -p ~/.local/share/cockpit
-ln -s `pwd`/dist ~/.local/share/cockpit/starter-kit
+ln -s `pwd`/dist ~/.local/share/cockpit/cockpit-slurm
 ```
 
 After changing the code and running `make` again, reload the Cockpit page in
@@ -73,11 +82,11 @@ set to upload code changes to `~/.local/share/cockpit/` instead of
 To "uninstall" the locally installed version, run `make devel-uninstall`, or
 remove manually the symlink:
 
-    rm ~/.local/share/cockpit/starter-kit
+    rm ~/.local/share/cockpit/cockpit-slurm
 
 # Running eslint
 
-Cockpit Starter Kit uses [ESLint](https://eslint.org/) to automatically check
+Cockpit SLURM uses [ESLint](https://eslint.org/) to automatically check
 JavaScript/TypeScript code style in `.js[x]` and `.ts[x]` files.
 
 eslint is executed as part of `test/static-code`, aka. `make codecheck`.
@@ -119,6 +128,7 @@ if you run into failures and don't want to adjust tests, consider checking out
 Cockpit's test/common from a tag instead of main (see the `test/common`
 target in `Makefile`).
 
+your project after forking from starter-kit.
 After the test VM is prepared, you can manually run the test without rebuilding
 the VM, possibly with extra options for tracing and halting on test failures
 (for interactive debugging):
@@ -136,10 +146,11 @@ You can also run the test against a different Cockpit image, for example:
 # Running tests in CI
 
 These tests can be run in [Cirrus CI](https://cirrus-ci.org/), on their free
-[Linux Containers](https://cirrus-ci.org/guide/linux/) environment which
+[Linux Containers](https://cirrus-ci.org/guide/quick-start/) environment which
 explicitly supports `/dev/kvm`. Please see [Quick
 Start](https://cirrus-ci.org/guide/quick-start/) how to set up Cirrus CI for
-your project after forking from starter-kit.
+your project. The Cockpit starter-kit template was helpful during initial
+bootstrapping but this repository is now a project-specific implementation.
 
 The included [.cirrus.yml](./.cirrus.yml) runs the integration tests for two
 operating systems (Fedora and CentOS 8). Note that if/once your project grows
@@ -158,46 +169,28 @@ they only run [@nondestructive tests](https://github.com/cockpit-project/cockpit
 
 # Customizing
 
-After cloning the Starter Kit you should rename the files, package names, and
-labels to your own project's name. Use these commands to find out what to
-change:
+This repository is tailored for `cockpit-slurm`. If you started from the
+Cockpit starter-kit template, the template references have been updated to use
+`cockpit-slurm` where appropriate; a few historical references to the template
+remain in the development notes. To find any remaining template markers, run:
 
     find -iname '*starter*'
     git grep -i starter
 
 # Automated release
 
-Once your cloned project is ready for a release, you should consider automating
-that. The intention is that the only manual step for releasing a project is to create
-a signed tag for the version number, which includes a summary of the noteworthy
-changes:
-
-```
-123
-
-- this new feature
-- fix bug #123
-```
-
-Pushing the release tag triggers the [release.yml](.github/workflows/release.yml.disabled)
-[GitHub action](https://github.com/features/actions) workflow. This creates the
-official release tarball and publishes as upstream release to GitHub. The
-workflow is disabled by default -- to use it, edit the file as per the comment
-at the top, and rename it to just `*.yml`.
-
-The Fedora and COPR releases are done with [Packit](https://packit.dev/),
-see the [packit.yaml](./packit.yaml) control file.
+Once your project is ready for a release, consider automating the process. The
+intended release workflow is to create a signed tag with a changelog entry, and
+let CI build and publish the release tarball. The existing `.github/workflows`
+and `packit.yaml` files in this repository are configured for this purpose.
 
 # Automated maintenance
 
-It is important to keep your [NPM modules](./package.json) up to date, to keep
-up with security updates and bug fixes. This happens with
-[dependabot](https://github.com/dependabot),
-see [configuration file](.github/dependabot.yml).
+Keep your `package.json` dependencies up to date to receive security and bug
+fixes. Dependabot configuration is included in `.github/dependabot.yml`.
 
 # Further reading
 
- * The [Starter Kit announcement](https://cockpit-project.org/blog/cockpit-starter-kit.html)
-   blog post explains the rationale for this project.
+ * The [Starter Kit announcement](https://cockpit-project.org/blog/cockpit-starter-kit.html) (upstream template)
  * [Cockpit Deployment and Developer documentation](https://cockpit-project.org/guide/latest/)
  * [Make your project easily discoverable](https://cockpit-project.org/blog/making-a-cockpit-application.html)

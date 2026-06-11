@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="addon">
+  <id>org.cockpit_project.cockpit_slurm</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <name>Cockpit SLURM</name>
+  <summary>Scaffolding for a cockpit module</summary>
+  <description>
+    <p>
+      Scaffolding for a cockpit module.
+
+      This is just a demo which does not do much. Please replace
+      this with a real description.
+    </p>
+  </description>
+  <extends>org.cockpit_project.cockpit</extends>
+  <launchable type="cockpit-manifest">cockpit-slurm</launchable>
+  <url type="homepage">https://github.com/lingweicai/cockpit-slurm</url>
+  <url type="bugtracker">https://github.com/lingweicai/cockpit-slurm/issues</url>
+  <update_contact>lingweicai_AT_users.noreply.github.com</update_contact>
+  <developer id="lingweicai">
+    <name>lingweicai</name>
+  </developer>
+</component>

@@ -1,0 +1,152 @@
+# Read-only bridge deployment for cockpit-slurm
+
+This document describes how to run the bridge as a dedicated Linux service account named `cockpit-slurm` and keep the bridge at read-only Slurm access.
+
+## Scope
+
+The current bridge implementation only invokes `sinfo --json` to refresh the cached cluster view. It does not perform Slurm write operations today.
+
+Because of that, the safest default is:
+
+- run the bridge as a dedicated system account named `cockpit-slurm`
+- grant that account only the minimum Slurm access required for read-only queries
+- keep any create/update/delete capability in a separate privileged path if you add it later
+
+## Why a dedicated account
+
+Using a dedicated `cockpit-slurm` account is better than reusing `root` or a daemon owner account because it:
+
+- keeps the bridge isolated from other services
+- makes auditing easier
+- avoids over-privileging the bridge
+- allows you to define a clear Slurm policy for this service
+
+## Recommended Linux account
+
+Create a system account named `cockpit-slurm`:
+
+    sudo useradd --system --home /usr/lib/cockpit-slurm --create-home --shell /usr/sbin/nologin cockpit-slurm
+
+If your distribution prefers `useradd --system --no-create-home`, adjust accordingly.
+
+## Recommended Slurm access
+
+For the current read-only bridge, configure the Slurm identity used by `cockpit-slurm` with the lowest privilege that still allows `sinfo` to succeed.
+
+- If your Slurm deployment uses `AdminLevel`, set the bridge account to `None`.
+- Do not grant full Admin to the bridge unless you intentionally want the bridge to perform administrative Slurm operations.
+
+## systemd service
+
+Create `/etc/systemd/system/cockpit-slurm-bridge.service` with the following content:
+
+    [Unit]
+    Description=Cockpit Slurm bridge
+    After=network.target
+
+    [Service]
+    Type=simple
+    User=cockpit-slurm
+    Group=cockpit-slurm
+    RuntimeDirectory=cockpit-slurm
+    RuntimeDirectoryMode=0755
+    ExecStart=/usr/local/bin/cockpit-slurm-bridge
+    Restart=on-failure
+    NoNewPrivileges=true
+    ProtectSystem=strict
+    ProtectHome=true
+
+    [Install]
+    WantedBy=multi-user.target
+
+Important details:
+
+- `RuntimeDirectory=cockpit-slurm` gives the service its own writable `/run/cockpit-slurm/` path.
+- `ExecStart` must point to the installed bridge binary.
+- `ProtectSystem=strict` and `ProtectHome=true` are useful hardening defaults for a read-only service.
+
+## Enable and start
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now cockpit-slurm-bridge
+
+## Verify
+
+Check that the service is running:
+
+    sudo systemctl status cockpit-slurm-bridge
+
+Confirm the socket exists:
+
+    ls -l /run/cockpit-slurm/
+
+The bridge should be reachable from Cockpit through the Unix socket at `/run/cockpit-slurm/bridge.sock`.
+
+## Notes for future admin operations
+
+If you later add backend commands that create, update, or delete Slurm objects, do not reuse the `cockpit-slurm` identity for those actions.
+
+Instead, create a separate privileged backend identity or a separate service path, and keep the current `cockpit-slurm` account read-only.
+
+## Summary
+
+- Use `cockpit-slurm` as the Linux service account.
+- Keep the bridge read-only.
+- Use `AdminLevel=None` for the bridge identity if your Slurm policy requires an explicit level.
+- Add a separate privileged path for any future create/update/delete operations.
+
+## Fedora / RHEL / CentOS install recipe
+
+### 1. Build the bridge binary
+
+Install build dependencies if needed:
+
+    sudo dnf install golang make
+
+Build the bridge binary from the repository root:
+
+    make bridge/cockpit-slurm-bridge
+
+This produces the binary at `bridge/cockpit-slurm-bridge`.
+
+### 2. Install the binary and unit file
+
+    sudo install -m 0755 bridge/cockpit-slurm-bridge /usr/local/bin/cockpit-slurm-bridge
+    sudo install -m 0644 packaging/cockpit-slurm-bridge.service /etc/systemd/system/cockpit-slurm-bridge.service
+
+### 3. Create the service user
+
+    sudo useradd --system --home /var/lib/cockpit-slurm --create-home --shell /usr/sbin/nologin cockpit-slurm
+
+If you already have a dedicated service account, skip this step.
+
+### 4. Reload systemd and enable the service
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable cockpit-slurm-bridge
+
+### 5. Start the service
+
+    sudo systemctl start cockpit-slurm-bridge
+
+### 6. Verify
+
+    sudo systemctl status cockpit-slurm-bridge
+    ls -l /run/cockpit-slurm/
+
+The service should expose the socket at `/run/cockpit-slurm/bridge.sock`.
+
+### 7. Optional: view logs
+
+    sudo journalctl -u cockpit-slurm-bridge -f
+
+## Important note about socket permissions
+
+The current bridge code creates the Unix socket at `/run/cockpit-slurm/bridge.sock` but does not explicitly set its mode. On Fedora/RHEL/CentOS that may leave the socket inaccessible to the Cockpit client context if the default umask is restrictive.
+
+If your Cockpit clients cannot connect, either:
+
+- adjust the bridge code to chmod the socket after bind, or
+- install a small `ExecStartPost`/`ExecStartPre` step to fix the socket mode after the service starts.
+
+For a read-only deployment, the most predictable behavior is to make the socket world-readable and writable.
