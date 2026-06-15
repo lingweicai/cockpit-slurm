@@ -90,7 +90,7 @@ packaging/arch/PKGBUILD: packaging/arch/PKGBUILD.in
 $(DIST_TEST): $(NODE_MODULES_TEST) $(COCKPIT_REPO_STAMP) $(shell find src/ -type f) package.json build.js
 	NODE_ENV=$(NODE_ENV) ./build.js
 
-$(BRIDGE_BINARY): bridge/go.mod $(shell find bridge -type f)
+$(BRIDGE_BINARY): bridge/go.mod $(shell find bridge -type f ! -path 'bridge/cockpit-slurm-bridge')
 	cd bridge && go build -o $(abspath $(BRIDGE_BINARY)) ./cmd/cockpit-slurm-bridge
 
 $(CHANNEL_BINARY): channel/go.mod $(shell find channel -name '*.go' -o -name 'go.mod' -o -name 'go.sum')
@@ -106,7 +106,7 @@ clean:
 	rm -f metafile.json runtime-npm-modules.txt
 	rm -f $(BRIDGE_BINARY) $(CHANNEL_BINARY)
 
-install: $(DIST_TEST) po/LINGUAS $(CHANNEL_BINARY)
+install: $(DIST_TEST) po/LINGUAS $(CHANNEL_BINARY) $(BRIDGE_BINARY)
 	mkdir -p $(DESTDIR)$(PREFIX)/share/cockpit/$(PACKAGE_NAME)
 	cp -r dist/* $(DESTDIR)$(PREFIX)/share/cockpit/$(PACKAGE_NAME)
 	mkdir -p $(DESTDIR)$(PREFIX)/share/metainfo/
@@ -115,16 +115,29 @@ install: $(DIST_TEST) po/LINGUAS $(CHANNEL_BINARY)
 		-o $(DESTDIR)$(PREFIX)/share/metainfo/$(APPSTREAMFILE)
 	mkdir -p $(DESTDIR)$(PREFIX)/libexec/cockpit-slurm
 	install -m 755 $(CHANNEL_BINARY) $(DESTDIR)$(PREFIX)/libexec/cockpit-slurm/
+	mkdir -p $(DESTDIR)$(PREFIX)/sbin
+	install -m 755 $(BRIDGE_BINARY) $(DESTDIR)$(PREFIX)/sbin/
+	mkdir -p $(DESTDIR)/etc/systemd/system
+	install -m 644 packaging/cockpit-slurm-bridge.service $(DESTDIR)/etc/systemd/system/cockpit-slurm-bridge.service
 
 # this requires a built source tree and avoids having to install anything system-wide
-devel-install: $(DIST_TEST)
+# also install the bridge/channel binaries for local development execution.
+devel-install: $(DIST_TEST) $(BRIDGE_BINARY) $(CHANNEL_BINARY)
 	mkdir -p ~/.local/share/cockpit
-	ln -s `pwd`/dist ~/.local/share/cockpit/$(PACKAGE_NAME)
+	ln -snf `pwd`/dist ~/.local/share/cockpit/$(PACKAGE_NAME)
+	mkdir -p ~/.local/libexec/cockpit-slurm
+	install -m 755 $(BRIDGE_BINARY) ~/.local/libexec/cockpit-slurm/
+	install -m 755 $(CHANNEL_BINARY) ~/.local/libexec/cockpit-slurm/
+	mkdir -p ~/.local/bin
+	ln -snf ~/.local/libexec/cockpit-slurm/cockpit-slurm-bridge ~/.local/bin/cockpit-slurm-bridge
+	ln -snf ~/.local/libexec/cockpit-slurm/cockpit-slurm-channel ~/.local/bin/cockpit-slurm-channel
 
 # assumes that there was symlink set up using the above devel-install target,
 # and removes it
 devel-uninstall:
 	rm -f ~/.local/share/cockpit/$(PACKAGE_NAME)
+	rm -f ~/.local/bin/cockpit-slurm-bridge ~/.local/bin/cockpit-slurm-channel
+	rm -rf ~/.local/libexec/cockpit-slurm
 
 print-version:
 	@echo "$(VERSION)"

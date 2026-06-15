@@ -37,12 +37,24 @@ make
 
 # Installing
 
-`make install` compiles and installs the package in `/usr/local/share/cockpit/`. The
-convenience targets `srpm` and `rpm` build the source and binary rpms,
-respectively. Both of these make use of the `dist` target, which is used
-to generate the distribution tarball. In `production` mode, source files are
-automatically minified and compressed. Set `NODE_ENV=production` if you want to
-duplicate this behavior.
+`make install` compiles and installs the package of dist built with directory of src for frontend files in `/usr/local/share/cockpit`. 
+
+install backend executable of cockpit-slurm-bridge and cockpit-slurm-channel for in path below: 
+`/usr/local/sbin/cockpit-slurm-bridge`
+`/usr/local/libexec/cockpit-slurm-channel`
+
+and socket file to the path:
+`/run/cockpit-slurm/bridge.sock`
+
+For Redhat/RockyLinux RPM package of `production` mode, install front end dist directory to: 
+`/usr/share/cockpit` 
+and backend files to:
+`/usr/sbin/cockpit-slurm-bridge`
+`/usr/libexec/cockpit-slurm-channel`
+`/run/cockpit-slurm/bridge.sock`
+
+To start cockpit-slurm-bridge service in backend, run command 
+`sudo systemctl start cockpit-slurm-bridge`
 
 For development, you usually want to run your module straight out of the git
 tree. To do that, run `make devel-install`, which links your checkout to the
@@ -70,6 +82,17 @@ or
 When developing against a virtual machine, watch mode can also automatically upload
 the code changes by setting the `RSYNC` environment variable to
 the remote hostname.
+
+If you are testing locally with a custom bridge socket path, the frontend now supports
+a runtime override via a browser global. Set it to the same path used by the bridge process:
+
+```js
+window.COCKPIT_SLURM_BRIDGE_SOCKET_PATH = "/run/user/1000/cockpit-slurm/bridge.sock";
+```
+
+This browser global is only required for local development testing where the frontend is
+running against a non-standard bridge socket path. If that override is not set, the client
+falls back to the default socket path at `/run/cockpit-slurm/bridge.sock`.
 
     RSYNC=c make watch
 

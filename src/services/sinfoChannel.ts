@@ -2,11 +2,21 @@ import type { SinfoPartitionRow } from "../types/sinfo";
 
 declare const cockpit: any;
 
-const SOCKET_PATH = "/run/cockpit-slurm/bridge.sock";
+const DEFAULT_SOCKET_PATH = "/run/cockpit-slurm/bridge.sock";
 const CHANNEL_HELPERS = [
-  "/usr/libexec/cockpit-slurm/cockpit-slurm-channel",
   "/usr/local/libexec/cockpit-slurm/cockpit-slurm-channel",
+  "/usr/libexec/cockpit-slurm/cockpit-slurm-channel",
 ];
+
+function getBridgeSocketPath(): string {
+  const globalAny = globalThis as any;
+  const overridePath = typeof globalAny.COCKPIT_SLURM_BRIDGE_SOCKET_PATH === 'string' && globalAny.COCKPIT_SLURM_BRIDGE_SOCKET_PATH.trim();
+  if (overridePath) {
+    return overridePath;
+  }
+
+  return DEFAULT_SOCKET_PATH;
+}
 
 type SinfoCachePayload = {
   rows: SinfoPartitionRow[];
@@ -14,9 +24,11 @@ type SinfoCachePayload = {
 };
 
 function openSinfoChannel() {
+  const socketPath = getBridgeSocketPath();
+
   for (const helperPath of CHANNEL_HELPERS) {
     try {
-      const ch = cockpit.channel({ payload: "stream", spawn: [helperPath] });
+      const ch = cockpit.channel({ payload: "stream", spawn: [helperPath, "--socket", socketPath] });
       // If the returned object looks like a real channel, use it.
       if (ch && (typeof ch.send === 'function' || typeof ch.on === 'function' || typeof ch.addEventListener === 'function')) {
         return ch;
@@ -29,10 +41,10 @@ function openSinfoChannel() {
   }
 
   try {
-    return cockpit.channel(SOCKET_PATH);
+    return cockpit.channel(socketPath);
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.error('sinfo: failed to open channel to socket', SOCKET_PATH, err);
+    console.error('sinfo: failed to open channel to socket', socketPath, err);
     throw err;
   }
 }
@@ -96,17 +108,21 @@ export async function fetchSinfo(): Promise<SinfoCachePayload> {
     const hasAddEventListener = typeof channel?.addEventListener === 'function';
     const hasReadySignal = typeof channel?.ready !== 'undefined';
 
-    // Debug info to help diagnose channel lifecycle in browser
-    // eslint-disable-next-line no-console
-    console.debug('sinfo: opened channel', {
-      channel,
-      id: channel?.id,
-      options: channel?.options,
+    // Capture a small snapshot instead of logging the live channel object
+    // to avoid console showing a later-mutated object (stale/late snapshot).
+    const channelSnapshot = {
+      valid: typeof channel?.valid !== 'undefined' ? channel.valid : null,
+      id: channel?.id ?? (channel?.options && channel.options.id) ?? (Array.isArray(channel?.options?.spawn) ? channel.options.spawn[0] : null) ?? null,
+      options: channel?.options ?? null,
       hasSend,
       hasOn,
       hasAddEventListener,
       hasReadySignal,
-    });
+    };
+
+    // Debug info to help diagnose channel lifecycle in browser
+    // eslint-disable-next-line no-console
+    console.debug('sinfo: opened channel', channelSnapshot);
 
     if (!hasSend) {
       reject(new Error('Sinfo channel is not writable: missing send()')); 
@@ -135,6 +151,21 @@ export async function fetchSinfo(): Promise<SinfoCachePayload> {
     }
 
     function onClose(err: any) {
+      // Some channel implementations emit a closure Event/CustomEvent with no
+      // error details. Treat those as non-error closures and log at debug
+      // level to avoid noisy warnings in the console.
+      const isEventLike = err instanceof Event || (err && typeof err.type === 'string');
+
+      if (isEventLike) {
+        // Prefer channel id from the event detail when available.
+        const detailChannelId = err?.detail?.channel ?? null;
+        // eslint-disable-next-line no-console
+        console.debug('sinfo: channel closed (event)', { type: err?.type ?? null, detail: err?.detail ?? null, detailChannelId });
+        cleanup();
+        reject(new Error(`Sinfo channel closed${detailChannelId ? `: ${detailChannelId}` : ''}`));
+        return;
+      }
+
       // eslint-disable-next-line no-console
       console.warn('sinfo: channel closed', err);
       cleanup();
@@ -155,7 +186,7 @@ export async function fetchSinfo(): Promise<SinfoCachePayload> {
       try {
         const message = JSON.stringify({ action: "get_sinfo" }) + "\n";
         // eslint-disable-next-line no-console
-        console.debug('sinfo: sending get_sinfo', { message });
+        console.debug('sinfo: sending get_sinfo', { message, channel: channelSnapshot });
         channel.send(message);
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -229,17 +260,19 @@ export function subscribeSinfoUpdates(callback: (event: any) => void) {
   const hasAddEventListener = typeof channel?.addEventListener === 'function';
   const hasReadySignal = typeof channel?.ready !== 'undefined';
 
-  // Debug
-  // eslint-disable-next-line no-console
-  console.debug('sinfo: subscribe opening channel', {
-    channel,
-    id: channel?.id,
-    options: channel?.options,
+  const channelSnapshot = {
+    valid: typeof channel?.valid !== 'undefined' ? channel.valid : null,
+    id: channel?.id ?? null,
+    options: channel?.options ?? null,
     hasSend,
     hasOn,
     hasAddEventListener,
     hasReadySignal,
-  });
+  };
+
+  // Debug
+  // eslint-disable-next-line no-console
+  console.debug('sinfo: subscribe opening channel', channelSnapshot);
 
   if (!hasSend) {
     // eslint-disable-next-line no-console
@@ -253,7 +286,7 @@ export function subscribeSinfoUpdates(callback: (event: any) => void) {
     try {
       const message = JSON.stringify({ action: "subscribe" }) + "\n";
       // eslint-disable-next-line no-console
-      console.debug('sinfo: sending subscribe', { message });
+      console.debug('sinfo: sending subscribe', { message, channel: channelSnapshot });
       channel.send(message);
     } catch (e) {
       // eslint-disable-next-line no-console

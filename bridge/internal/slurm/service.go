@@ -1,6 +1,7 @@
 package slurm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -85,9 +86,9 @@ func (s *SinfoService) fetchOnce(ctx context.Context) error {
 
 func (s *SinfoService) fetchSinfo(ctx context.Context) (*models.SinfoResponse, error) {
 	cmd := exec.CommandContext(ctx, "sinfo", "--json")
-	raw, err := cmd.Output()
+	raw, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("execute sinfo --json: %w", err)
+		return nil, fmt.Errorf("execute sinfo --json: %v: %s", err, bytes.TrimSpace(raw))
 	}
 
 	var resp models.SinfoResponse

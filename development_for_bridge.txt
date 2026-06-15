@@ -150,3 +150,20 @@ If your Cockpit clients cannot connect, either:
 - install a small `ExecStartPost`/`ExecStartPre` step to fix the socket mode after the service starts.
 
 For a read-only deployment, the most predictable behavior is to make the socket world-readable and writable.
+
+### Development-mode socket path
+
+For local developer runs, you can avoid `/run/cockpit-slurm` permission issues by using a user-writable socket path instead of the system runtime directory. Set the `COCKPIT_SLURM_BRIDGE_SOCKET_PATH` environment variable for both the bridge and channel:
+
+```bash
+export COCKPIT_SLURM_BRIDGE_SOCKET_PATH="$XDG_RUNTIME_DIR/cockpit-slurm/bridge.sock"
+mkdir -p "$(dirname "$COCKPIT_SLURM_BRIDGE_SOCKET_PATH")"
+```
+
+Then start the bridge as your normal user:
+
+```bash
+~/.local/bin/cockpit-slurm-bridge
+```
+
+and use the same variable when running the channel or any local dev wrapper.
