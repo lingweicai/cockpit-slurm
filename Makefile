@@ -225,3 +225,28 @@ $(NODE_MODULES_TEST): package.json
 	env -u NODE_ENV npm prune
 
 .PHONY: all clean install devel-install devel-uninstall print-version dist node-cache rpm prepare-check check vm print-vm
+
+# New targets for single-module layout using cmd/ (created by reorganization)
+CMD_BINDIR := bin
+CMD_BRIDGE := cmd/cockpit-slurm-bridge
+CMD_CHANNEL := cmd/cockpit-slurm-channel
+
+.PHONY: build-cmd build-cmd-bridge build-cmd-channel run-cmd-bridge run-cmd-channel
+
+# build both command binaries under cmd/
+build-cmd: build-cmd-bridge build-cmd-channel
+
+build-cmd-bridge:
+	@mkdir -p $(CMD_BINDIR)
+	$(GO) build -o $(CMD_BINDIR)/cockpit-slurm-bridge ./$(CMD_BRIDGE)
+
+build-cmd-channel:
+	@mkdir -p $(CMD_BINDIR)
+	$(GO) build -o $(CMD_BINDIR)/cockpit-slurm-channel ./$(CMD_CHANNEL)
+
+run-cmd-bridge: build-cmd-bridge
+	./$(CMD_BINDIR)/cockpit-slurm-bridge
+
+run-cmd-channel: build-cmd-channel
+	./$(CMD_BINDIR)/cockpit-slurm-channel
+
