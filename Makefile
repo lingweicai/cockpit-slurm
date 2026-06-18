@@ -10,6 +10,12 @@ TARFILE=$(RPM_NAME)-$(VERSION).tar.xz
 NODE_CACHE=$(RPM_NAME)-node-$(VERSION).tar.xz
 SPEC=$(RPM_NAME).spec
 PREFIX ?= /usr/local
+DEVEL_PREFIX ?= $(HOME)/.local
+DEVEL_COCKPIT_DIR = $(DEVEL_PREFIX)/share/cockpit
+DEVEL_LIBEXECDIR = $(DEVEL_PREFIX)/libexec/cockpit-slurm
+DEVEL_BINDIR = $(DEVEL_PREFIX)/bin
+DEVEL_ENV_DIR = $(HOME)/.config/environment.d
+DEVEL_ENV_FILE = $(DEVEL_ENV_DIR)/cockpit-slurm-devel.conf
 APPSTREAMFILE=org.cockpit_project.$(subst -,_,$(PACKAGE_NAME)).metainfo.xml
 VM_IMAGE=$(CURDIR)/test/images/$(TEST_OS)
 # stamp file to check for node_modules/
@@ -131,22 +137,25 @@ uninstall:
 # this requires a built source tree and avoids having to install anything system-wide
 # also install the bridge/channel binaries for local development execution.
 devel-install: $(DIST_TEST) $(BRIDGE_BINARY) $(CHANNEL_BINARY)
-	mkdir -p ~/.local/share/cockpit
-	ln -snf `pwd`/dist ~/.local/share/cockpit/$(PACKAGE_NAME)
-	mkdir -p ~/.local/libexec/cockpit-slurm
-	install -m 755 $(BRIDGE_BINARY) ~/.local/libexec/cockpit-slurm/
-	install -m 755 $(CHANNEL_BINARY) ~/.local/libexec/cockpit-slurm/
-	mkdir -p ~/.local/bin
-	ln -snf ~/.local/libexec/cockpit-slurm/cockpit-slurm-bridge ~/.local/bin/cockpit-slurm-bridge
-	ln -snf ~/.local/libexec/cockpit-slurm/cockpit-slurm-channel ~/.local/bin/cockpit-slurm-channel
+	mkdir -p $(DEVEL_COCKPIT_DIR)
+	ln -snf $(CURDIR)/dist $(DEVEL_COCKPIT_DIR)/$(PACKAGE_NAME)
+	mkdir -p $(DEVEL_LIBEXECDIR)
+	install -m 755 $(BRIDGE_BINARY) $(DEVEL_LIBEXECDIR)/
+	install -m 755 $(CHANNEL_BINARY) $(DEVEL_LIBEXECDIR)/
+	mkdir -p $(DEVEL_BINDIR)
+	ln -snf $(DEVEL_LIBEXECDIR)/cockpit-slurm-bridge $(DEVEL_BINDIR)/cockpit-slurm-bridge
+	ln -snf $(DEVEL_LIBEXECDIR)/cockpit-slurm-channel $(DEVEL_BINDIR)/cockpit-slurm-channel
+	mkdir -p $(DEVEL_ENV_DIR)
+	printf 'COCKPIT_SLURM_BRIDGE_SOCKET_PATH=/run/user/%s/cockpit-slurm/bridge.sock\n' "$$(id -u)" > $(DEVEL_ENV_FILE)
 
 # assumes that there was symlink set up using the above devel-install target,
 # and removes it
 devel-uninstall:
-	rm -f ~/.local/share/cockpit/$(PACKAGE_NAME)
-	rm -f ~/.local/bin/cockpit-slurm-bridge ~/.local/bin/cockpit-slurm-channel
-	rm -rf ~/.local/libexec/cockpit-slurm
-	rm -rf ~/.local/share/cockpit
+	rm -f $(DEVEL_COCKPIT_DIR)/$(PACKAGE_NAME)
+	rm -f $(DEVEL_BINDIR)/cockpit-slurm-bridge $(DEVEL_BINDIR)/cockpit-slurm-channel
+	rm -rf $(DEVEL_LIBEXECDIR)
+	rm -f $(DEVEL_ENV_FILE)
+	rmdir --ignore-fail-on-non-empty $(DEVEL_COCKPIT_DIR)
 
 print-version:
 	@echo "$(VERSION)"
@@ -258,4 +267,3 @@ run-cmd-bridge: build-cmd-bridge
 
 run-cmd-channel: build-cmd-channel
 	./$(CMD_BINDIR)/cockpit-slurm-channel
-

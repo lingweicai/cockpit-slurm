@@ -58,8 +58,13 @@ To start cockpit-slurm-bridge service in backend, run command
 
 For development, you usually want to run your module straight out of the git
 tree. To do that, run `make devel-install`, which links your checkout to the
-location were cockpit-bridge looks for packages. If you prefer to do
-this manually:
+location were cockpit-bridge looks for packages, installs bridge/channel under
+`~/.local/libexec/cockpit-slurm`, and creates `~/.local/bin` symlinks. It also
+configures `COCKPIT_SLURM_BRIDGE_SOCKET_PATH` to:
+
+`/run/user/<uid>/cockpit-slurm/bridge.sock`
+
+If you prefer to do this manually:
 
 ```
 mkdir -p ~/.local/share/cockpit
