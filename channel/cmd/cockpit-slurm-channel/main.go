@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 const defaultBridgeSocketPath = "/run/cockpit-slurm/bridge.sock"
@@ -25,6 +26,9 @@ func bridgeSocketDefaults() string {
 	}
 	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
 		return filepath.Join(runtimeDir, "cockpit-slurm", "bridge.sock")
+	}
+	if uid := os.Getuid(); uid > 0 {
+		return filepath.Join("/run/user", strconv.Itoa(uid), "cockpit-slurm", "bridge.sock")
 	}
 	return defaultBridgeSocketPath
 }
