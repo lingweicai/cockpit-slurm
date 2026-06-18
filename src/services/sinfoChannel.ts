@@ -1,18 +1,30 @@
 import type { SinfoPartitionRow } from "../types/sinfo";
-
-declare const cockpit: any;
+import cockpit from "cockpit";
 
 const DEFAULT_SOCKET_PATH = "/run/cockpit-slurm/bridge.sock";
-const CHANNEL_HELPERS = [
-  "/usr/local/libexec/cockpit-slurm/cockpit-slurm-channel",
-  "/usr/libexec/cockpit-slurm/cockpit-slurm-channel",
+const CHANNEL_HELPER_CANDIDATES = [
+  (userHome?: string) => userHome ? `${userHome}/.local/libexec/cockpit-slurm/cockpit-slurm-channel` : null,
+  () => "/usr/local/libexec/cockpit-slurm/cockpit-slurm-channel",
+  () => "/usr/libexec/cockpit-slurm/cockpit-slurm-channel",
 ];
+
+function getChannelHelpers(): string[] {
+  const userHome = cockpit.info?.user?.home;
+  return CHANNEL_HELPER_CANDIDATES
+    .map((candidate) => candidate(userHome))
+    .filter((helperPath): helperPath is string => Boolean(helperPath));
+}
 
 function getBridgeSocketPath(): string {
   const globalAny = globalThis as any;
   const overridePath = typeof globalAny.COCKPIT_SLURM_BRIDGE_SOCKET_PATH === 'string' && globalAny.COCKPIT_SLURM_BRIDGE_SOCKET_PATH.trim();
   if (overridePath) {
     return overridePath;
+  }
+
+  const cockpitUser = cockpit.info?.user;
+  if (cockpitUser && typeof cockpitUser.uid === 'number') {
+    return `/run/user/${cockpitUser.uid}/cockpit-slurm/bridge.sock`;
   }
 
   return DEFAULT_SOCKET_PATH;
@@ -26,9 +38,9 @@ type SinfoCachePayload = {
 function openSinfoChannel() {
   const socketPath = getBridgeSocketPath();
 
-  for (const helperPath of CHANNEL_HELPERS) {
+  for (const helperPath of getChannelHelpers()) {
     try {
-      const ch = cockpit.channel({ payload: "stream", spawn: [helperPath, "--socket", socketPath] });
+      const ch = cockpit.channel({ payload: "stream", spawn: [helperPath] });
       // If the returned object looks like a real channel, use it.
       if (ch && (typeof ch.send === 'function' || typeof ch.on === 'function' || typeof ch.addEventListener === 'function')) {
         return ch;

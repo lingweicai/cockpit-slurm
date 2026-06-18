@@ -16,8 +16,8 @@ VM_IMAGE=$(CURDIR)/test/images/$(TEST_OS)
 NODE_MODULES_TEST=package-lock.json
 # build.js ran in non-watch mode
 DIST_TEST=runtime-npm-modules.txt
-BRIDGE_BINARY=cmd/cockpit-slurm-bridge/cockpit-slurm-bridge
-CHANNEL_BINARY=cmd/cockpit-slurm-channel/cockpit-slurm-channel
+BRIDGE_BINARY=cmd/cockpit-slurm-bridge/cockpit-slurm-bridge/cockpit-slurm-bridge
+CHANNEL_BINARY=cmd/cockpit-slurm-channel/cockpit-slurm-channel/cockpit-slurm-channel
 # one example file in pkg/lib to check if it was already checked out
 COCKPIT_REPO_STAMP=pkg/lib/cockpit-po-plugin.js
 # common arguments for tar, mostly to make the generated tarballs reproducible
@@ -42,7 +42,7 @@ COCKPIT_REPO_TREE = '$(strip $(COCKPIT_REPO_COMMIT))^{tree}'
 $(COCKPIT_REPO_STAMP): Makefile
 	@git rev-list --quiet --objects $(COCKPIT_REPO_TREE) -- 2>/dev/null || \
 	    git fetch --no-tags --no-write-fetch-head --depth=1 $(COCKPIT_REPO_URL) $(COCKPIT_REPO_COMMIT)
-	git archive $(COCKPIT_REPO_TREE) -- $(COCKPIT_REPO_FILES) | tar x
+	git archive $(COCKPIT_REPO_TREE) -- $(COCKPIT_REPO_FILES) | tar --skip-old-files -x
 
 #
 # i18n
@@ -91,10 +91,10 @@ $(DIST_TEST): $(NODE_MODULES_TEST) $(COCKPIT_REPO_STAMP) $(shell find src/ -type
 	NODE_ENV=$(NODE_ENV) ./build.js
 
 $(BRIDGE_BINARY): cmd/go.mod $(shell find cmd/cockpit-slurm-bridge -name '*.go' -o -name 'go.mod' -o -name 'go.sum')
-	cd cmd && go build -o $(abspath $(BRIDGE_BINARY)) ./cockpit-slurm-bridge
+	cd cmd && go build -o $(abspath $(BRIDGE_BINARY)) ./cockpit-slurm-bridge/cockpit-slurm-bridge
 
 $(CHANNEL_BINARY): cmd/go.mod $(shell find cmd/cockpit-slurm-channel -name '*.go' -o -name 'go.mod' -o -name 'go.sum')
-	cd cmd && go build -o $(abspath $(CHANNEL_BINARY)) ./cockpit-slurm-channel
+	cd cmd && go build -o $(abspath $(CHANNEL_BINARY)) ./cockpit-slurm-channel/cockpit-slurm-channel
 
 watch: $(NODE_MODULES_TEST) $(COCKPIT_REPO_STAMP)
 	NODE_ENV=$(NODE_ENV) ./build.js --watch
@@ -120,6 +120,14 @@ install: $(DIST_TEST) po/LINGUAS $(CHANNEL_BINARY) $(BRIDGE_BINARY)
 	mkdir -p $(DESTDIR)/etc/systemd/system
 	install -m 644 packaging/cockpit-slurm-bridge.service $(DESTDIR)/etc/systemd/system/cockpit-slurm-bridge.service
 
+uninstall:
+	rm -rf $(DESTDIR)$(PREFIX)/share/cockpit/$(PACKAGE_NAME)
+	rm -f $(DESTDIR)$(PREFIX)/share/metainfo/$(APPSTREAMFILE)
+	rm -f $(DESTDIR)$(PREFIX)/libexec/cockpit-slurm/cockpit-slurm-channel
+	rm -rf $(DESTDIR)$(PREFIX)/libexec/cockpit-slurm
+	rm -f $(DESTDIR)$(PREFIX)/sbin/cockpit-slurm-bridge
+	rm -f $(DESTDIR)/etc/systemd/system/cockpit-slurm-bridge.service
+
 # this requires a built source tree and avoids having to install anything system-wide
 # also install the bridge/channel binaries for local development execution.
 devel-install: $(DIST_TEST) $(BRIDGE_BINARY) $(CHANNEL_BINARY)
@@ -138,6 +146,7 @@ devel-uninstall:
 	rm -f ~/.local/share/cockpit/$(PACKAGE_NAME)
 	rm -f ~/.local/bin/cockpit-slurm-bridge ~/.local/bin/cockpit-slurm-channel
 	rm -rf ~/.local/libexec/cockpit-slurm
+	rm -rf ~/.local/share/cockpit
 
 print-version:
 	@echo "$(VERSION)"
