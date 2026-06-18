@@ -16,8 +16,8 @@ VM_IMAGE=$(CURDIR)/test/images/$(TEST_OS)
 NODE_MODULES_TEST=package-lock.json
 # build.js ran in non-watch mode
 DIST_TEST=runtime-npm-modules.txt
-BRIDGE_BINARY=bridge/cockpit-slurm-bridge
-CHANNEL_BINARY=channel/cockpit-slurm-channel
+BRIDGE_BINARY=cmd/cockpit-slurm-bridge/cockpit-slurm-bridge
+CHANNEL_BINARY=cmd/cockpit-slurm-channel/cockpit-slurm-channel
 # one example file in pkg/lib to check if it was already checked out
 COCKPIT_REPO_STAMP=pkg/lib/cockpit-po-plugin.js
 # common arguments for tar, mostly to make the generated tarballs reproducible
@@ -90,11 +90,11 @@ packaging/arch/PKGBUILD: packaging/arch/PKGBUILD.in
 $(DIST_TEST): $(NODE_MODULES_TEST) $(COCKPIT_REPO_STAMP) $(shell find src/ -type f) package.json build.js
 	NODE_ENV=$(NODE_ENV) ./build.js
 
-$(BRIDGE_BINARY): bridge/go.mod $(shell find bridge -type f ! -path 'bridge/cockpit-slurm-bridge')
-	cd bridge && go build -o $(abspath $(BRIDGE_BINARY)) ./cmd/cockpit-slurm-bridge
+$(BRIDGE_BINARY): cmd/go.mod $(shell find cmd/cockpit-slurm-bridge -name '*.go' -o -name 'go.mod' -o -name 'go.sum')
+	cd cmd && go build -o $(abspath $(BRIDGE_BINARY)) ./cockpit-slurm-bridge
 
-$(CHANNEL_BINARY): channel/go.mod $(shell find channel -name '*.go' -o -name 'go.mod' -o -name 'go.sum')
-	cd channel && go build -o $(abspath $(CHANNEL_BINARY)) ./cmd/cockpit-slurm-channel
+$(CHANNEL_BINARY): cmd/go.mod $(shell find cmd/cockpit-slurm-channel -name '*.go' -o -name 'go.mod' -o -name 'go.sum')
+	cd cmd && go build -o $(abspath $(CHANNEL_BINARY)) ./cockpit-slurm-channel
 
 watch: $(NODE_MODULES_TEST) $(COCKPIT_REPO_STAMP)
 	NODE_ENV=$(NODE_ENV) ./build.js --watch

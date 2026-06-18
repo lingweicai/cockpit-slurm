@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lingweicai/cockpit-slurm/bridge/internal/models"
-	"github.com/lingweicai/cockpit-slurm/bridge/internal/slurm"
+	"github.com/lingweicai/cockpit-slurm/cmd/cockpit-slurm-bridge/internal/slurm"
+	"github.com/lingweicai/cockpit-slurm/cmd/internal/models"
 )
 
 type Server struct {
