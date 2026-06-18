@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/lingweicai/cockpit-slurm/bridge/internal/models"
+	"github.com/lingweicai/cockpit-slurm/cmd/internal/models"
 )
 
 type Event struct {
