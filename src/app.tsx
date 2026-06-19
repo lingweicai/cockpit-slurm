@@ -172,7 +172,7 @@ export const Application = () => {
         <Card>
             <CardTitle>{_('Sinfo partitions')}</CardTitle>
             <CardBody>
-                <p> lwc test --- 22:17 </p>
+                <p> lwc test --- 08:30 </p>
                 {loading && !rows.length && (
                     <>
                         <Alert variant="info" title={_('Loading sinfo data from the bridge cache...')} />
