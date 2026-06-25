@@ -3,6 +3,8 @@ package models
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -156,4 +158,110 @@ func (AccountEntity) ModifyCommand(accountName string, spec AccountUpdateSpec) (
 	args := []string{"sacctmgr", "--immediate", "modify", "account", "where", fmt.Sprintf("Name=%s", name), "set"}
 	args = append(args, setArgs...)
 	return args, nil
+}
+
+// Equal reports whether two accounts contain the same meaningful data.
+func (a *Account) Equal(b *Account) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	return a.Name == b.Name &&
+		a.Description == b.Description &&
+		a.Organization == b.Organization &&
+		stringSlicesEqual(a.Flags, b.Flags) &&
+		assocShortsEqual(a.Associations, b.Associations) &&
+		coordinatorsEqual(a.Coordinators, b.Coordinators)
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	if len(a) != len(b) {
+		return false
+	}
+
+	left := append([]string(nil), a...)
+	right := append([]string(nil), b...)
+	sort.Strings(left)
+	sort.Strings(right)
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func assocShortsEqual(a, b []AccountAssocShort) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	if len(a) != len(b) {
+		return false
+	}
+
+	left := make([]string, 0, len(a))
+	right := make([]string, 0, len(b))
+	for i := range a {
+		left = append(left, assocShortKey(a[i]))
+	}
+	for i := range b {
+		right = append(right, assocShortKey(b[i]))
+	}
+	sort.Strings(left)
+	sort.Strings(right)
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func coordinatorsEqual(a, b []AccountCoordinator) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	if len(a) != len(b) {
+		return false
+	}
+
+	left := make([]string, 0, len(a))
+	right := make([]string, 0, len(b))
+	for i := range a {
+		left = append(left, coordinatorKey(a[i]))
+	}
+	for i := range b {
+		right = append(right, coordinatorKey(b[i]))
+	}
+	sort.Strings(left)
+	sort.Strings(right)
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func assocShortKey(v AccountAssocShort) string {
+	id := ""
+	if v.ID != nil {
+		id = strconv.Itoa(int(*v.ID))
+	}
+	return v.Account + "\x00" + v.Cluster + "\x00" + v.Partition + "\x00" + v.User + "\x00" + id
+}
+
+func coordinatorKey(v AccountCoordinator) string {
+	direct := ""
+	if v.Direct != nil {
+		if *v.Direct {
+			direct = "true"
+		} else {
+			direct = "false"
+		}
+	}
+	return v.Name + "\x00" + direct
 }
