@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lingweicai/cockpit-slurm/cmd/cockpit-slurm-bridge/internal/slurm"
+	bridgeaccount "github.com/lingweicai/cockpit-slurm/cmd/cockpit-slurm-bridge/internal/account"
 	"github.com/lingweicai/cockpit-slurm/cmd/internal/models"
 )
 
@@ -21,8 +21,8 @@ type Server struct {
 	mu         sync.Mutex
 	clients    map[int]*client
 	nextID     int
-	eventCh    <-chan slurm.Event
-	cache      *models.SinfoCache
+	manager    *bridgeaccount.Manager
+	events     <-chan bridgeaccount.Event
 }
 
 type client struct {
@@ -33,23 +33,34 @@ type client struct {
 }
 
 type request struct {
-	Action    string `json:"action"`
-	Subscribe bool   `json:"subscribe,omitempty"`
+	RequestID string          `json:"request_id,omitempty"`
+	Entity    string          `json:"entity,omitempty"`
+	Action    string          `json:"action"`
+	Payload   json.RawMessage `json:"payload,omitempty"`
 }
 
 type response struct {
 	Type      string      `json:"type"`
+	RequestID string      `json:"request_id,omitempty"`
+	Status    string      `json:"status,omitempty"`
 	Data      interface{} `json:"data,omitempty"`
 	Error     string      `json:"error,omitempty"`
 	Timestamp time.Time   `json:"timestamp"`
 }
 
-func NewServer(socketPath string, eventCh <-chan slurm.Event, cache *models.SinfoCache) *Server {
+type accountActionPayload struct {
+	Name         string  `json:"name,omitempty"`
+	AccountName  string  `json:"account_name,omitempty"`
+	Description  *string `json:"description,omitempty"`
+	Organization *string `json:"organization,omitempty"`
+}
+
+func NewServer(socketPath string, manager *bridgeaccount.Manager) *Server {
 	return &Server{
 		socketPath: socketPath,
 		clients:    make(map[int]*client),
-		eventCh:    eventCh,
-		cache:      cache,
+		manager:    manager,
+		events:     manager.EventChannel(),
 	}
 }
 
@@ -84,7 +95,7 @@ func (s *Server) Start(ctx context.Context) error {
 				return fmt.Errorf("accept connection: %w", err)
 			}
 		}
-		go s.handleConnection(conn)
+		go s.handleConnection(ctx, conn)
 	}
 }
 
@@ -93,7 +104,7 @@ func (s *Server) runEventLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case evt, ok := <-s.eventCh:
+		case evt, ok := <-s.events:
 			if !ok {
 				return
 			}
@@ -102,45 +113,80 @@ func (s *Server) runEventLoop(ctx context.Context) {
 	}
 }
 
-func (s *Server) handleConnection(conn net.Conn) {
-	client := &client{conn: conn, id: s.nextID, done: make(chan struct{})}
+func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
+	client := &client{conn: conn, done: make(chan struct{})}
 	s.addClient(client)
 	defer s.removeClient(client)
 
+	go client.writeLoop()
+
 	client.send(response{Type: "connection.ready", Timestamp: time.Now().UTC()})
-	client.send(response{Type: "sinfo.response", Data: s.currentCache(), Timestamp: time.Now().UTC()})
+	client.send(response{Type: "account.snapshot", Data: s.currentSnapshot(), Timestamp: time.Now().UTC()})
 
 	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() {
-		buf := scanner.Bytes()
 		var req request
-		if err := json.Unmarshal(buf, &req); err != nil {
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
 			client.send(response{Type: "error", Error: fmt.Sprintf("invalid request: %v", err), Timestamp: time.Now().UTC()})
 			continue
 		}
-		s.handleRequest(client, req)
+		s.handleRequest(ctx, client, req)
 	}
 
 	conn.Close()
 	close(client.done)
 }
 
-func (s *Server) handleRequest(c *client, req request) {
+func (s *Server) handleRequest(ctx context.Context, c *client, req request) {
 	switch req.Action {
-	case "get_sinfo":
-		c.send(response{Type: "sinfo.response", Data: s.currentCache(), Timestamp: time.Now().UTC()})
+	case "get_accounts":
+		c.send(response{Type: "account.snapshot", Data: s.currentSnapshot(), Timestamp: time.Now().UTC()})
 	case "subscribe":
-		c.send(response{Type: "sinfo.subscribed", Data: nil, Timestamp: time.Now().UTC()})
+		c.send(response{Type: "account.subscribed", Timestamp: time.Now().UTC()})
+	case "add_account":
+		payload, err := decodeAccountPayload(req.Payload)
+		if err != nil {
+			c.send(response{Type: "request.response", RequestID: req.RequestID, Status: "error", Error: err.Error(), Timestamp: time.Now().UTC()})
+			return
+		}
+		result, err := s.manager.AddAccount(ctx, req.RequestID, models.AccountCreateSpec{
+			Name:         payload.accountName(),
+			Description:  payload.stringValue(payload.Description),
+			Organization: payload.stringValue(payload.Organization),
+		})
+		c.send(accountResultResponse(req.RequestID, result, err))
+	case "modify_account":
+		payload, err := decodeAccountPayload(req.Payload)
+		if err != nil {
+			c.send(response{Type: "request.response", RequestID: req.RequestID, Status: "error", Error: err.Error(), Timestamp: time.Now().UTC()})
+			return
+		}
+		accountName := payload.accountName()
+		result, err := s.manager.ModifyAccount(ctx, req.RequestID, accountName, models.AccountUpdateSpec{
+			Description:  payload.Description,
+			Organization: payload.Organization,
+		})
+		c.send(accountResultResponse(req.RequestID, result, err))
+	case "delete_account":
+		payload, err := decodeAccountPayload(req.Payload)
+		if err != nil {
+			c.send(response{Type: "request.response", RequestID: req.RequestID, Status: "error", Error: err.Error(), Timestamp: time.Now().UTC()})
+			return
+		}
+		result, err := s.manager.DeleteAccount(ctx, req.RequestID, payload.accountName())
+		c.send(accountResultResponse(req.RequestID, result, err))
 	default:
-		c.send(response{Type: "error", Error: fmt.Sprintf("unknown action %q", req.Action), Timestamp: time.Now().UTC()})
+		c.send(response{Type: "request.response", RequestID: req.RequestID, Status: "error", Error: fmt.Sprintf("unknown action %q", req.Action), Timestamp: time.Now().UTC()})
 	}
 }
 
-func (s *Server) currentCache() map[string]interface{} {
-	rows, updatedAt := s.cache.Get()
+func (s *Server) currentSnapshot() map[string]interface{} {
+	accounts, generation := s.manager.Snapshot()
 	return map[string]interface{}{
-		"rows":       rows,
-		"updated_at": updatedAt,
+		"entity":     "account",
+		"generation": generation,
+		"accounts":   accounts,
+		"count":      len(accounts),
 	}
 }
 
@@ -159,7 +205,7 @@ func (s *Server) removeClient(c *client) {
 	c.conn.Close()
 }
 
-func (s *Server) broadcast(evt slurm.Event) {
+func (s *Server) broadcast(evt bridgeaccount.Event) {
 	s.mu.Lock()
 	clients := make([]*client, 0, len(s.clients))
 	for _, c := range s.clients {
@@ -173,6 +219,12 @@ func (s *Server) broadcast(evt slurm.Event) {
 }
 
 func (c *client) send(msg response) {
+	select {
+	case <-c.done:
+		return
+	default:
+	}
+
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
@@ -181,5 +233,55 @@ func (c *client) send(msg response) {
 		return
 	}
 	payload = append(payload, '\n')
-	c.conn.Write(payload)
+	_, _ = c.conn.Write(payload)
+}
+
+func (c *client) writeLoop() {
+	<-c.done
+}
+
+func decodeAccountPayload(raw json.RawMessage) (accountActionPayload, error) {
+	if len(raw) == 0 {
+		return accountActionPayload{}, nil
+	}
+
+	var payload accountActionPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return accountActionPayload{}, fmt.Errorf("decode account payload: %w", err)
+	}
+	return payload, nil
+}
+
+func (p accountActionPayload) accountName() string {
+	if p.Name != "" {
+		return p.Name
+	}
+	return p.AccountName
+}
+
+func (p accountActionPayload) stringValue(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
+func accountResultResponse(requestID string, result bridgeaccount.RequestResult, err error) response {
+	if err != nil {
+		return response{
+			Type:      "request.response",
+			RequestID: requestID,
+			Status:    "error",
+			Error:     err.Error(),
+			Timestamp: time.Now().UTC(),
+		}
+	}
+
+	return response{
+		Type:      "request.response",
+		RequestID: requestID,
+		Status:    result.Status,
+		Data:      result,
+		Timestamp: time.Now().UTC(),
+	}
 }

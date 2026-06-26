@@ -11,13 +11,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lingweicai/cockpit-slurm/cmd/cockpit-slurm-bridge/internal/slurm"
+	"github.com/lingweicai/cockpit-slurm/cmd/cockpit-slurm-bridge/internal/account"
 	"github.com/lingweicai/cockpit-slurm/cmd/cockpit-slurm-bridge/internal/socket"
+	"github.com/lingweicai/cockpit-slurm/cmd/internal/provider"
 )
 
 const (
 	defaultSocketPath   = "/run/cockpit-slurm/bridge.sock"
-	defaultPollInterval = 10 * time.Second
+	defaultPollInterval = 30 * time.Second
 )
 
 func bridgeSocketDefaults() string {
@@ -42,12 +43,19 @@ func main() {
 	flag.StringVar(&socketPath, "s", socketPath, "path to bridge socket (shorthand)")
 	flag.Parse()
 
-	service := slurm.NewSinfoService(defaultPollInterval)
-	server := socket.NewServer(socketPath, service.EventChannel(), service.Cache())
+	accountManager := account.NewManager(provider.NewSacctmgrAccountProvider())
+	count, err := accountManager.LoadInitialCache(ctx)
+	if err != nil {
+		log.Fatalf("load initial account cache: %v", err)
+	}
+	log.Printf("Loaded %d accounts into cache", count)
+	log.Printf("Generation: %d", accountManager.Cache().Generation())
+
+	server := socket.NewServer(socketPath, accountManager)
 
 	go func() {
-		if err := service.Run(ctx); err != nil {
-			log.Printf("sinfo service exited: %v", err)
+		if err := accountManager.Run(ctx, defaultPollInterval); err != nil {
+			log.Printf("account poller exited: %v", err)
 			cancel()
 		}
 	}()
