@@ -306,7 +306,7 @@ func (m *Manager) fetchAccountMaybe(ctx context.Context, accountName string) (*m
 		return nil, false, nil
 	}
 
-	account := resp.Accounts[0]
+	account := models.AccountFromV0043Account(resp.Accounts[0])
 	return &account, true, nil
 }
 

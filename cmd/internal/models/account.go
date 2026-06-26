@@ -51,7 +51,7 @@ type AccountAssocRecSet = UserAssocRecSet
 
 // AccountsResponse represents the JSON payload of `sacctmgr list account --json`.
 type AccountsResponse struct {
-	Accounts []Account             `json:"accounts"`
+	Accounts []V0043Account        `json:"accounts"`
 	Meta     *V0043OpenapiMeta     `json:"meta,omitempty"`
 	Errors   []V0043OpenapiError   `json:"errors,omitempty"`
 	Warnings []V0043OpenapiWarning `json:"warnings,omitempty"`
@@ -264,4 +264,152 @@ func coordinatorKey(v AccountCoordinator) string {
 		}
 	}
 	return v.Name + "\x00" + direct
+}
+
+// ToV0043Account converts the bridge account model to the generated OpenAPI type.
+func (a Account) ToV0043Account() V0043Account {
+	return V0043Account{
+		Name:         a.Name,
+		Description:  a.Description,
+		Organization: a.Organization,
+		Flags:        accountFlagsToV0043(a.Flags),
+		Associations: accountAssocShortsToV0043(a.Associations),
+		Coordinators: accountCoordinatorsToV0043(a.Coordinators),
+	}
+}
+
+// AccountFromV0043Account converts the generated OpenAPI type to the bridge model.
+func AccountFromV0043Account(account V0043Account) Account {
+	return Account{
+		Name:         account.Name,
+		Description:  account.Description,
+		Organization: account.Organization,
+		Flags:        accountFlagsFromV0043(account.Flags),
+		Associations: accountAssocShortsFromV0043(account.Associations),
+		Coordinators: accountCoordinatorsFromV0043(account.Coordinators),
+	}
+}
+
+func accountFlagsToV0043(flags []string) *[]V0043AccountFlags {
+	if len(flags) == 0 {
+		return nil
+	}
+
+	out := make([]V0043AccountFlags, 0, len(flags))
+	for _, flag := range flags {
+		out = append(out, V0043AccountFlags(flag))
+	}
+	return &out
+}
+
+func accountFlagsFromV0043(flags *[]V0043AccountFlags) []string {
+	if flags == nil || len(*flags) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(*flags))
+	for _, flag := range *flags {
+		out = append(out, string(flag))
+	}
+	return out
+}
+
+func accountAssocShortsToV0043(associations []AccountAssocShort) *V0043AssocShortList {
+	if len(associations) == 0 {
+		return nil
+	}
+
+	out := make(V0043AssocShortList, 0, len(associations))
+	for _, association := range associations {
+		out = append(out, AccountAssocShortToV0043(association))
+	}
+	return &out
+}
+
+func accountAssocShortsFromV0043(associations *V0043AssocShortList) []AccountAssocShort {
+	if associations == nil || len(*associations) == 0 {
+		return nil
+	}
+
+	out := make([]AccountAssocShort, 0, len(*associations))
+	for _, association := range *associations {
+		out = append(out, AccountAssocShortFromV0043(association))
+	}
+	return out
+}
+
+func accountCoordinatorsToV0043(coordinators []AccountCoordinator) *V0043CoordList {
+	if len(coordinators) == 0 {
+		return nil
+	}
+
+	out := make(V0043CoordList, 0, len(coordinators))
+	for _, coordinator := range coordinators {
+		out = append(out, AccountCoordinatorToV0043(coordinator))
+	}
+	return &out
+}
+
+func accountCoordinatorsFromV0043(coordinators *V0043CoordList) []AccountCoordinator {
+	if coordinators == nil || len(*coordinators) == 0 {
+		return nil
+	}
+
+	out := make([]AccountCoordinator, 0, len(*coordinators))
+	for _, coordinator := range *coordinators {
+		out = append(out, AccountCoordinatorFromV0043(coordinator))
+	}
+	return out
+}
+
+// AccountAssocShortToV0043 converts the bridge association summary to the generated type.
+func AccountAssocShortToV0043(association AccountAssocShort) V0043AssocShort {
+	return V0043AssocShort{
+		Account:   stringPtrOrNil(association.Account),
+		Cluster:   stringPtrOrNil(association.Cluster),
+		Id:        association.ID,
+		Partition: stringPtrOrNil(association.Partition),
+		User:      association.User,
+	}
+}
+
+// AccountAssocShortFromV0043 converts the generated association summary to the bridge type.
+func AccountAssocShortFromV0043(association V0043AssocShort) AccountAssocShort {
+	return AccountAssocShort{
+		Account:   derefString(association.Account),
+		Cluster:   derefString(association.Cluster),
+		ID:        association.Id,
+		Partition: derefString(association.Partition),
+		User:      association.User,
+	}
+}
+
+// AccountCoordinatorToV0043 converts the bridge coordinator to the generated type.
+func AccountCoordinatorToV0043(coordinator AccountCoordinator) V0043Coord {
+	return V0043Coord{
+		Name:   coordinator.Name,
+		Direct: coordinator.Direct,
+	}
+}
+
+// AccountCoordinatorFromV0043 converts the generated coordinator to the bridge type.
+func AccountCoordinatorFromV0043(coordinator V0043Coord) AccountCoordinator {
+	return AccountCoordinator{
+		Name:   coordinator.Name,
+		Direct: coordinator.Direct,
+	}
+}
+
+func stringPtrOrNil(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
+}
+
+func derefString(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
