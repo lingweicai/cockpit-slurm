@@ -8,11 +8,6 @@ import process from 'node:process';
 
 import { sassPlugin } from 'esbuild-sass-plugin';
 
-import { cockpitPoEsbuildPlugin } from './pkg/lib/cockpit-po-plugin.js';
-import { cockpitRsyncEsbuildPlugin } from './pkg/lib/cockpit-rsync-plugin.js';
-import { cleanPlugin } from './pkg/lib/esbuild-cleanup-plugin.js';
-import { cockpitCompressPlugin } from './pkg/lib/esbuild-compress-plugin.js';
-
 const useWasm = os.arch() !== 'x64';
 
 const esbuild = await (async () => {
@@ -95,9 +90,9 @@ function watch_dirs(dir, on_change) {
 const context = await esbuild.context({
     ...!production ? { sourcemap: "linked" } : {},
     bundle: true,
-    entryPoints: ['./src/index.js'],
+    entryPoints: ['./src/index.tsx'],
     // Allow external font files which live in ../../static/fonts
-    external: ['*.woff', '*.woff2', '*.jpg', '*.svg', '../../assets*'],
+    external: ['cockpit', 'cockpit-dark-theme', 'patternfly/patternfly-6-cockpit.scss', '*.woff', '*.woff2', '*.jpg', '*.svg', '../../assets*'],
     // Move all legal comments to a .LEGAL.txt file
     legalComments: 'external',
     loader: { ".js": "jsx", ".py": "text" },
@@ -107,7 +102,12 @@ const context = await esbuild.context({
     metafile: true,
     target: ['es2020'],
     plugins: [
-        cleanPlugin(),
+        {
+            name: 'clean-output',
+            setup() {
+                fs.rmSync(outdir, { recursive: true, force: true });
+            }
+        },
         // Esbuild will only copy assets that are explicitly imported and used in the code.
         // Copy the other files here.
         {
@@ -127,10 +127,6 @@ const context = await esbuild.context({
             filter: /\.scss/,
             quietDeps: true,
         }),
-
-        cockpitPoEsbuildPlugin(),
-        ...production ? [cockpitCompressPlugin()] : [],
-        cockpitRsyncEsbuildPlugin({ dest: packageJson.name }),
         notifyEndPlugin(),
     ]
 });

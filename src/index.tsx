@@ -9,7 +9,7 @@ import { createRoot } from 'react-dom/client';
 
 import "cockpit-dark-theme";
 
-import { Application } from './app.jsx';
+import { Application } from './app';
 
 // @ts-ignore: Cannot find module or type declarations for side-effect import
 import "patternfly/patternfly-6-cockpit.scss";

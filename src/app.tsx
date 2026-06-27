@@ -11,6 +11,8 @@ import { ExpandableRowContent, Table, Tbody, Td, Th, Thead, Tr } from '@patternf
 
 import cockpit from 'cockpit';
 
+import { ConnectionBanner } from './components/ConnectionBanner';
+import { ChannelProvider } from './lib/cockpit';
 import type { SinfoPartitionRow } from './types/sinfo';
 import { fetchSinfo, subscribeSinfoUpdates } from './services/sinfoChannel';
 
@@ -134,14 +136,14 @@ export const Application = () => {
             }
         };
 
-        void loadSinfo();
+        loadSinfo();
 
         const unsubscribe = subscribeSinfoUpdates((payload) => {
             if (payload?.type !== 'sinfo.updated') {
                 return;
             }
 
-            void fetchSinfo()
+            fetchSinfo()
                 .then((freshPayload) => {
                     if (!isMounted) {
                         return;
@@ -169,76 +171,78 @@ export const Application = () => {
     };
 
     return (
-        <Card>
-            <CardTitle>{_('Sinfo partitions')}</CardTitle>
-            <CardBody>
-                <p> lwc test --- 08:30 </p>
-                {loading && !rows.length && (
-                    <>
-                        <Alert variant="info" title={_('Loading sinfo data from the bridge cache...')} />
-                        {waitMessage && <p>{waitMessage}</p>}
-                    </>
-                )}
-                {error && (
-                    <Alert variant="danger" title={_('Unable to load sinfo data')}>
-                        {error}
-                    </Alert>
-                )}
+        <ChannelProvider>
+            <ConnectionBanner />
+            <Card>
+                <CardTitle>{_('Sinfo partitions')}</CardTitle>
+                <CardBody>
+                    {loading && !rows.length && (
+                        <>
+                            <Alert variant="info" title={_('Loading sinfo data from the bridge cache...')} />
+                            {waitMessage && <p>{waitMessage}</p>}
+                        </>
+                    )}
+                    {error && (
+                        <Alert variant="danger" title={_('Unable to load sinfo data')}>
+                            {error}
+                        </Alert>
+                    )}
 
-                {!loading && !error && (
-                    <>
-                        <p>{cockpit.format(_('Last update: $0'), formatUpdatedAt(updatedAt))}</p>
+                    {!loading && !error && (
+                        <>
+                            <p>{cockpit.format(_('Last update: $0'), formatUpdatedAt(updatedAt))}</p>
 
-                        {rows.length === 0 ? (
-                            <Alert variant="info" title={_('No sinfo rows are currently available.')} />
-                        ) : (
-                            <Table variant="compact">
-                                <Thead>
-                                    <Tr>
-                                        <Th screenReaderText={_('Expand row')} />
-                                        <Th>{_('Partition')}</Th>
-                                        <Th>{_('State')}</Th>
-                                        <Th>{_('Nodes')}</Th>
-                                        <Th>{_('CPUs')}</Th>
-                                        <Th>{_('Memory')}</Th>
-                                        <Th>{_('Availability')}</Th>
-                                    </Tr>
-                                </Thead>
-                                {rows.map((row, rowIndex) => {
-                                    const isExpanded = Boolean(expandedRows[rowIndex]);
+                            {rows.length === 0 ? (
+                                <Alert variant="info" title={_('No sinfo rows are currently available.')} />
+                            ) : (
+                                <Table variant="compact">
+                                    <Thead>
+                                        <Tr>
+                                            <Th screenReaderText={_('Expand row')} />
+                                            <Th>{_('Partition')}</Th>
+                                            <Th>{_('State')}</Th>
+                                            <Th>{_('Nodes')}</Th>
+                                            <Th>{_('CPUs')}</Th>
+                                            <Th>{_('Memory')}</Th>
+                                            <Th>{_('Availability')}</Th>
+                                        </Tr>
+                                    </Thead>
+                                    {rows.map((row, rowIndex) => {
+                                        const isExpanded = Boolean(expandedRows[rowIndex]);
 
-                                    return (
-                                        <Tbody key={row.partitionName} isExpanded={isExpanded}>
-                                            <Tr>
-                                                <Td
-                                                    expand={{
-                                                        isExpanded,
-                                                        rowIndex,
-                                                        onToggle: () => handleToggle(rowIndex),
-                                                    }}
-                                                />
-                                                <Td dataLabel={_('Partition')}>{row.partitionName}</Td>
-                                                <Td dataLabel={_('State')}>{row.partitionState?.join(', ') || _('Unknown')}</Td>
-                                                <Td dataLabel={_('Nodes')}>{row.nodesAllocated}/{row.nodesTotal}</Td>
-                                                <Td dataLabel={_('CPUs')}>{row.cpusAllocated}/{row.cpusTotal}</Td>
-                                                <Td dataLabel={_('Memory')}>{row.memoryAllocated}</Td>
-                                                <Td dataLabel={_('Availability')}>{row.availability}</Td>
-                                            </Tr>
-                                            <Tr isExpanded={isExpanded}>
-                                                <Td colSpan={7}>
-                                                    <ExpandableRowContent>
-                                                        {renderDetails(row)}
-                                                    </ExpandableRowContent>
-                                                </Td>
-                                            </Tr>
-                                        </Tbody>
-                                    );
-                                })}
-                            </Table>
-                        )}
-                    </>
-                )}
-            </CardBody>
-        </Card>
+                                        return (
+                                            <Tbody key={row.partitionName} isExpanded={isExpanded}>
+                                                <Tr>
+                                                    <Td
+                                                        expand={{
+                                                            isExpanded,
+                                                            rowIndex,
+                                                            onToggle: () => handleToggle(rowIndex),
+                                                        }}
+                                                    />
+                                                    <Td dataLabel={_('Partition')}>{row.partitionName}</Td>
+                                                    <Td dataLabel={_('State')}>{row.partitionState?.join(', ') || _('Unknown')}</Td>
+                                                    <Td dataLabel={_('Nodes')}>{row.nodesAllocated}/{row.nodesTotal}</Td>
+                                                    <Td dataLabel={_('CPUs')}>{row.cpusAllocated}/{row.cpusTotal}</Td>
+                                                    <Td dataLabel={_('Memory')}>{row.memoryAllocated}</Td>
+                                                    <Td dataLabel={_('Availability')}>{row.availability}</Td>
+                                                </Tr>
+                                                <Tr isExpanded={isExpanded}>
+                                                    <Td colSpan={7}>
+                                                        <ExpandableRowContent>
+                                                            {renderDetails(row)}
+                                                        </ExpandableRowContent>
+                                                    </Td>
+                                                </Tr>
+                                            </Tbody>
+                                        );
+                                    })}
+                                </Table>
+                            )}
+                        </>
+                    )}
+                </CardBody>
+            </Card>
+        </ChannelProvider>
     );
 };

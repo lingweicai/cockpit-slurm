@@ -1,349 +1,184 @@
-import type { SinfoPartitionRow } from "../types/sinfo";
-import cockpit from "cockpit";
+import cockpit from 'cockpit';
 
-const DEFAULT_SOCKET_PATH = "/run/cockpit-slurm/bridge.sock";
-const CHANNEL_HELPER_CANDIDATES = [
-  (userHome?: string) => userHome ? `${userHome}/.local/libexec/cockpit-slurm/cockpit-slurm-channel` : null,
-  () => "/usr/local/libexec/cockpit-slurm/cockpit-slurm-channel",
-  () => "/usr/libexec/cockpit-slurm/cockpit-slurm-channel",
-];
+import type { BridgeEnvelope } from '../types/bridge';
+import type { SinfoPartitionRow } from '../types/sinfo';
 
-function getChannelHelpers(): string[] {
-  const userHome = cockpit.info?.user?.home;
-  return CHANNEL_HELPER_CANDIDATES
-    .map((candidate) => candidate(userHome))
-    .filter((helperPath): helperPath is string => Boolean(helperPath));
-}
+import {
+  addChannelListener,
+  openBridgeChannel,
+  removeChannelListener,
+  sendJsonLine,
+} from '../lib/cockpit';
+import { parseBridgeMessages } from '../lib/cockpit/parser';
 
-function getBridgeSocketPath(): string {
-  const globalAny = globalThis as any;
-  const overridePath = typeof globalAny.COCKPIT_SLURM_BRIDGE_SOCKET_PATH === 'string' && globalAny.COCKPIT_SLURM_BRIDGE_SOCKET_PATH.trim();
-  if (overridePath) {
-    return overridePath;
-  }
-
-  const cockpitUser = cockpit.info?.user;
-  if (cockpitUser && typeof cockpitUser.uid === 'number') {
-    return `/run/user/${cockpitUser.uid}/cockpit-slurm/bridge.sock`;
-  }
-
-  return DEFAULT_SOCKET_PATH;
-}
+const _ = cockpit.gettext;
 
 type SinfoCachePayload = {
   rows: SinfoPartitionRow[];
   updated_at: string;
 };
 
-function openSinfoChannel() {
-  const socketPath = getBridgeSocketPath();
+function normalizeSinfoPayload(value: unknown): SinfoCachePayload | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
 
-  for (const helperPath of getChannelHelpers()) {
-    try {
-      const ch = cockpit.channel({ payload: "stream", spawn: [helperPath] });
-      // If the returned object looks like a real channel, use it.
-      if (ch && (typeof ch.send === 'function' || typeof ch.on === 'function' || typeof ch.addEventListener === 'function')) {
-        return ch;
-      }
-      // Otherwise try the next helper path.
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.debug('sinfo: spawn helper failed', helperPath, err);
+  const record = value as Record<string, unknown>;
+  const rows = Array.isArray(record.rows) ? record.rows as SinfoPartitionRow[] : null;
+  const updatedAt = typeof record.updated_at === 'string'
+    ? record.updated_at
+    : typeof record.updatedAt === 'string'
+      ? record.updatedAt
+      : null;
+
+  if (!rows || !updatedAt) {
+    return null;
+  }
+
+  return {
+    rows,
+    updated_at: updatedAt,
+  };
+}
+
+function extractSinfoPayload(message: BridgeEnvelope): SinfoCachePayload | null {
+  if (message && typeof message === 'object') {
+    const record = message as Record<string, unknown>;
+
+    if (record.type === 'sinfo.response' || record.type === 'sinfo.snapshot' || record.type === 'snapshot') {
+      return normalizeSinfoPayload(record.data ?? record.payload ?? record);
+    }
+
+    if (record.type === 'event' && record.entity === 'sinfo') {
+      return normalizeSinfoPayload(record.payload ?? record);
     }
   }
 
-  try {
-    return cockpit.channel(socketPath);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('sinfo: failed to open channel to socket', socketPath, err);
-    throw err;
-  }
+  return normalizeSinfoPayload(message);
 }
 
-function addChannelListener(channel: any, event: string, listener: (...args: any[]) => void) {
-  if (typeof channel.addEventListener === 'function') {
-    channel.addEventListener(event, listener);
-  } else if (typeof channel.on === 'function') {
-    channel.on(event, listener);
-  } else if (typeof channel.addListener === 'function') {
-    channel.addListener(event, listener);
-  } else {
-    // best-effort: some shims expose different shapes; ignore if unsupported
-    // eslint-disable-next-line no-console
-    console.warn('channel does not support addEventListener/on/addListener', event);
+function isInitializedSinfoPayload(payload: SinfoCachePayload | null) {
+  if (!payload?.updated_at) {
+    return false;
   }
+
+  const timestamp = Date.parse(payload.updated_at);
+  return Number.isFinite(timestamp) && timestamp > 0;
 }
 
-function removeChannelListener(channel: any, event: string, listener: (...args: any[]) => void) {
-  if (typeof channel.removeEventListener === 'function') {
-    channel.removeEventListener(event, listener);
-  } else if (typeof channel.removeListener === 'function') {
-    channel.removeListener(event, listener);
-  } else if (typeof channel.off === 'function') {
-    channel.off(event, listener);
-  } else {
-    // eslint-disable-next-line no-console
-    console.warn('channel does not support removeEventListener/removeListener/off', event);
-  }
-}
+function waitForChannelReady(channel: ReturnType<typeof openBridgeChannel>, onReady: () => void) {
+  const readyListener = () => {
+    removeChannelListener(channel, 'ready', readyListener);
+    onReady();
+  };
 
-function parseChannelEvent(data: any): any[] {
-  let raw = data;
+  addChannelListener(channel, 'ready', readyListener);
 
-  if (raw && typeof raw === 'object') {
-    if (typeof raw.data === 'string') {
-      raw = raw.data;
-    } else if (typeof raw.detail === 'string') {
-      raw = raw.detail;
-    } else if (raw.detail && typeof raw.detail === 'object') {
-      raw = raw.detail;
-    }
+  if (channel.ready) {
+    removeChannelListener(channel, 'ready', readyListener);
+    onReady();
   }
 
-  if (typeof raw === 'string') {
-    return raw
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-  }
-
-  return [raw];
+  return () => removeChannelListener(channel, 'ready', readyListener);
 }
 
 export async function fetchSinfo(): Promise<SinfoCachePayload> {
-  const channel = openSinfoChannel();
-  return new Promise((resolve, reject) => {
-    const hasSend = typeof channel?.send === 'function';
-    const hasOn = typeof channel?.on === 'function';
-    const hasAddEventListener = typeof channel?.addEventListener === 'function';
-    const hasReadySignal = typeof channel?.ready !== 'undefined';
+  const channel = openBridgeChannel();
 
-    // Capture a small snapshot instead of logging the live channel object
-    // to avoid console showing a later-mutated object (stale/late snapshot).
-    const channelSnapshot = {
-      valid: typeof channel?.valid !== 'undefined' ? channel.valid : null,
-      id: channel?.id ?? (channel?.options && channel.options.id) ?? (Array.isArray(channel?.options?.spawn) ? channel.options.spawn[0] : null) ?? null,
-      options: channel?.options ?? null,
-      hasSend,
-      hasOn,
-      hasAddEventListener,
-      hasReadySignal,
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let readyCleanup = () => {};
+
+    const cleanup = () => {
+      readyCleanup();
+      removeChannelListener(channel, 'message', onMessage);
+      removeChannelListener(channel, 'close', onClose);
+      channel.close();
     };
 
-    // Debug info to help diagnose channel lifecycle in browser
-    // eslint-disable-next-line no-console
-    console.debug('sinfo: opened channel', channelSnapshot);
-
-    if (!hasSend) {
-      reject(new Error('Sinfo channel is not writable: missing send()')); 
-      return;
-    }
-
-    function onMessage(data: any) {
-      let raw = data;
-      try {
-        const payloads = parseChannelEvent(raw);
-
-        for (const payload of payloads) {
-          // eslint-disable-next-line no-console
-          console.debug('sinfo: channel message', { raw, payload });
-
-          if (payload.type === "sinfo.response") {
-            cleanup();
-            resolve(payload.data as SinfoCachePayload);
-            return;
-          }
-        }
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn('sinfo: failed to parse channel message', raw, err);
-      }
-    }
-
-    function onClose(err: any) {
-      // Some channel implementations emit a closure Event/CustomEvent with no
-      // error details. Treat those as non-error closures and log at debug
-      // level to avoid noisy warnings in the console.
-      const isEventLike = err instanceof Event || (err && typeof err.type === 'string');
-
-      if (isEventLike) {
-        // Prefer channel id from the event detail when available.
-        const detailChannelId = err?.detail?.channel ?? null;
-        // eslint-disable-next-line no-console
-        console.debug('sinfo: channel closed (event)', { type: err?.type ?? null, detail: err?.detail ?? null, detailChannelId });
-        cleanup();
-        reject(new Error(`Sinfo channel closed${detailChannelId ? `: ${detailChannelId}` : ''}`));
+    const finish = (payload: SinfoCachePayload) => {
+      if (settled) {
         return;
       }
 
-      // eslint-disable-next-line no-console
-      console.warn('sinfo: channel closed', err);
+      settled = true;
       cleanup();
-      const msg = err instanceof Error ? err.message : (err && err.message) || 'Sinfo channel closed';
-      reject(new Error(`Sinfo channel closed: ${msg}`));
-    }
-
-    function cleanup() {
-      removeChannelListener(channel, "message", onMessage);
-      removeChannelListener(channel, "close", onClose);
-      channel.close?.();
-    }
-
-    addChannelListener(channel, "message", onMessage);
-    addChannelListener(channel, "close", onClose);
-
-    const sendRequest = () => {
-      try {
-        const message = JSON.stringify({ action: "get_sinfo" }) + "\n";
-        // eslint-disable-next-line no-console
-        console.debug('sinfo: sending get_sinfo', { message, channel: channelSnapshot });
-        channel.send(message);
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error('sinfo: failed to send get_sinfo', e);
-      }
+      resolve(payload);
     };
 
-    let requestSent = false;
-    const sendRequestOnce = () => {
-      if (!requestSent) {
-        requestSent = true;
-        sendRequest();
+    const fail = (message: string) => {
+      if (settled) {
+        return;
       }
+
+      settled = true;
+      cleanup();
+      reject(new Error(message));
     };
 
-    if (hasOn || hasAddEventListener) {
-      let fallbackTimeout: ReturnType<typeof setTimeout> | undefined;
-
-      const onReady = () => {
-        // eslint-disable-next-line no-console
-        console.debug('sinfo: channel ready');
-        removeChannelListener(channel, 'ready', onReady);
-        if (fallbackTimeout !== undefined) {
-          clearTimeout(fallbackTimeout);
+    const onMessage = (data: unknown) => {
+      const messages = parseBridgeMessages(data);
+      for (const message of messages) {
+        const payload = extractSinfoPayload(message);
+        if (payload) {
+          finish(payload);
+          return;
         }
-        sendRequestOnce();
-      };
+      }
+    };
 
-      addChannelListener(channel, 'ready', onReady);
-
-      if (channel.ready) {
-        removeChannelListener(channel, 'ready', onReady);
-        sendRequestOnce();
+    const onClose = (event: unknown) => {
+      if (settled) {
+        return;
       }
 
-      fallbackTimeout = setTimeout(() => {
-        // If ready never fires, still send once after a short delay.
-        // eslint-disable-next-line no-console
-        console.debug('sinfo: ready event did not fire; sending request anyway');
-        sendRequestOnce();
-      }, 150);
-    } else {
-      sendRequestOnce();
-    }
+      if (event instanceof Error) {
+        fail(event.message);
+        return;
+      }
+
+      if (event && typeof event === 'object' && 'message' in event && typeof (event as { message?: unknown }).message === 'string') {
+        fail((event as { message: string }).message);
+        return;
+      }
+
+      fail(_('Sinfo channel closed before a response was received.'));
+    };
+
+    addChannelListener(channel, 'message', onMessage);
+    addChannelListener(channel, 'close', onClose);
+
+    readyCleanup = waitForChannelReady(channel, () => {
+      sendJsonLine(channel, { action: 'get_sinfo' });
+    });
   });
 }
 
-export function subscribeSinfoUpdates(callback: (event: any) => void) {
-  const channel = openSinfoChannel();
-  const onMessage = (data: any) => {
-    let raw = data;
-    try {
-      const payloads = parseChannelEvent(raw);
+export function subscribeSinfoUpdates(callback: (event: BridgeEnvelope) => void) {
+  const channel = openBridgeChannel();
 
-      for (const payload of payloads) {
-        // eslint-disable-next-line no-console
-        console.debug('sinfo: subscribe message', { raw, payload });
-
-        if (payload.type?.startsWith("sinfo.")) {
-          callback(payload);
+  const onMessage = (data: unknown) => {
+    const messages = parseBridgeMessages(data);
+    for (const message of messages) {
+      if (message && typeof message === 'object') {
+        const record = message as Record<string, unknown>;
+        if (record.type === 'sinfo.updated' || record.type === 'sinfo.event' || record.entity === 'sinfo') {
+          callback(message);
         }
       }
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('sinfo: failed to parse subscribe message', raw, err);
     }
   };
 
-  const hasSend = typeof channel?.send === 'function';
-  const hasOn = typeof channel?.on === 'function';
-  const hasAddEventListener = typeof channel?.addEventListener === 'function';
-  const hasReadySignal = typeof channel?.ready !== 'undefined';
-
-  const channelSnapshot = {
-    valid: typeof channel?.valid !== 'undefined' ? channel.valid : null,
-    id: channel?.id ?? null,
-    options: channel?.options ?? null,
-    hasSend,
-    hasOn,
-    hasAddEventListener,
-    hasReadySignal,
+  const startSubscription = () => {
+    sendJsonLine(channel, { action: 'subscribe' });
   };
 
-  // Debug
-  // eslint-disable-next-line no-console
-  console.debug('sinfo: subscribe opening channel', channelSnapshot);
-
-  if (!hasSend) {
-    // eslint-disable-next-line no-console
-    console.error('sinfo: subscribe channel is not writable: missing send()');
-    return () => {};
-  }
-
-  addChannelListener(channel, "message", onMessage);
-
-  const performSubscribe = () => {
-    try {
-      const message = JSON.stringify({ action: "subscribe" }) + "\n";
-      // eslint-disable-next-line no-console
-      console.debug('sinfo: sending subscribe', { message, channel: channelSnapshot });
-      channel.send(message);
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error('sinfo: subscribe send failed', e);
-    }
-  };
-
-  let subscribeSent = false;
-  const performSubscribeOnce = () => {
-    if (!subscribeSent) {
-      subscribeSent = true;
-      performSubscribe();
-    }
-  };
-
-  let fallbackTimeout: ReturnType<typeof setTimeout> | undefined;
-  const onReadySub = () => {
-    // eslint-disable-next-line no-console
-    console.debug('sinfo: subscribe channel ready');
-    removeChannelListener(channel, 'ready', onReadySub);
-    if (fallbackTimeout !== undefined) {
-      clearTimeout(fallbackTimeout);
-    }
-    performSubscribeOnce();
-  };
-
-  if (hasOn || hasAddEventListener) {
-    addChannelListener(channel, 'ready', onReadySub);
-
-    if (channel.ready) {
-      removeChannelListener(channel, 'ready', onReadySub);
-      performSubscribeOnce();
-    }
-
-    fallbackTimeout = setTimeout(() => {
-      // eslint-disable-next-line no-console
-      console.debug('sinfo: subscribe ready event did not fire; sending request anyway');
-      performSubscribeOnce();
-    }, 150);
-  } else {
-    performSubscribeOnce();
-  }
+  const readyCleanup = waitForChannelReady(channel, startSubscription);
+  addChannelListener(channel, 'message', onMessage);
 
   return () => {
-    removeChannelListener(channel, "message", onMessage);
-    channel.close?.();
+    readyCleanup();
+    removeChannelListener(channel, 'message', onMessage);
+    channel.close();
   };
 }
