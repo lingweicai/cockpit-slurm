@@ -58,7 +58,7 @@ func (p *SacctmgrAccountProvider) ListAccounts(ctx context.Context) ([]*models.A
 
 	accounts := make([]*models.Account, 0, len(resp.Accounts))
 	for i := range resp.Accounts {
-		account := resp.Accounts[i]
+		account := models.AccountFromV0043Account(resp.Accounts[i])
 		accounts = append(accounts, &account)
 	}
 

@@ -3,6 +3,8 @@ package socket
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	bridgeaccount "github.com/lingweicai/cockpit-slurm/cmd/cockpit-slurm-bridge/internal/account"
+	bridgeentity "github.com/lingweicai/cockpit-slurm/cmd/cockpit-slurm-bridge/internal/entity"
 	"github.com/lingweicai/cockpit-slurm/cmd/internal/models"
 )
 
@@ -26,33 +29,53 @@ type Server struct {
 }
 
 type client struct {
-	conn    net.Conn
-	writeMu sync.Mutex
-	id      int
-	done    chan struct{}
+	conn          net.Conn
+	mu            sync.Mutex
+	writeMu       sync.Mutex
+	id            int
+	connectionID  string
+	subscriptions map[string]uint64
+	done          chan struct{}
 }
 
 type request struct {
-	RequestID string          `json:"request_id,omitempty"`
-	Entity    string          `json:"entity,omitempty"`
-	Action    string          `json:"action"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
+	RequestID  string          `json:"request_id,omitempty"`
+	Type       string          `json:"type"`
+	Entity     string          `json:"entity,omitempty"`
+	ID         string          `json:"id,omitempty"`
+	Generation uint64          `json:"generation,omitempty"`
+	Payload    json.RawMessage `json:"payload,omitempty"`
 }
 
 type response struct {
-	Type      string      `json:"type"`
-	RequestID string      `json:"request_id,omitempty"`
-	Status    string      `json:"status,omitempty"`
-	Data      interface{} `json:"data,omitempty"`
-	Error     string      `json:"error,omitempty"`
-	Timestamp time.Time   `json:"timestamp"`
+	Type         string            `json:"type"`
+	RequestID    string            `json:"request_id,omitempty"`
+	Entity       string            `json:"entity,omitempty"`
+	ConnectionID string            `json:"connection_id,omitempty"`
+	Success      bool              `json:"success,omitempty"`
+	Status       string            `json:"status,omitempty"`
+	Generation   uint64            `json:"generation,omitempty"`
+	Items        []*models.Account `json:"items,omitempty"`
+	Added        []*models.Account `json:"added,omitempty"`
+	Modified     []*models.Account `json:"modified,omitempty"`
+	Deleted      []*models.Account `json:"deleted,omitempty"`
+	Data         interface{}       `json:"data,omitempty"`
+	Error        string            `json:"error,omitempty"`
+	Timestamp    time.Time         `json:"timestamp"`
 }
 
-type accountActionPayload struct {
+type accountRequestPayload struct {
 	Name         string  `json:"name,omitempty"`
 	AccountName  string  `json:"account_name,omitempty"`
 	Description  *string `json:"description,omitempty"`
 	Organization *string `json:"organization,omitempty"`
+}
+
+type accountSnapshot struct {
+	Entity     string            `json:"entity"`
+	Generation uint64            `json:"generation"`
+	Items      []*models.Account `json:"items"`
+	Count      int               `json:"count"`
 }
 
 func NewServer(socketPath string, manager *bridgeaccount.Manager) *Server {
@@ -114,20 +137,34 @@ func (s *Server) runEventLoop(ctx context.Context) {
 }
 
 func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
-	client := &client{conn: conn, done: make(chan struct{})}
+	client := &client{
+		conn:          conn,
+		connectionID:  newConnectionID(),
+		subscriptions: map[string]uint64{"account": s.currentGeneration()},
+		done:          make(chan struct{}),
+	}
 	s.addClient(client)
 	defer s.removeClient(client)
 
 	go client.writeLoop()
 
-	client.send(response{Type: "connection.ready", Timestamp: time.Now().UTC()})
-	client.send(response{Type: "account.snapshot", Data: s.currentSnapshot(), Timestamp: time.Now().UTC()})
+	client.send(response{
+		Type:         "connection.ready",
+		ConnectionID: client.connectionID,
+		Success:      true,
+		Timestamp:    time.Now().UTC(),
+	})
+	client.send(snapshotResponse("", s.currentSnapshot()))
 
 	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() {
 		var req request
 		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
-			client.send(response{Type: "error", Error: fmt.Sprintf("invalid request: %v", err), Timestamp: time.Now().UTC()})
+			client.send(response{
+				Type:      "error",
+				Error:     fmt.Sprintf("invalid request: %v", err),
+				Timestamp: time.Now().UTC(),
+			})
 			continue
 		}
 		s.handleRequest(ctx, client, req)
@@ -138,15 +175,69 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 }
 
 func (s *Server) handleRequest(ctx context.Context, c *client, req request) {
-	switch req.Action {
-	case "get_accounts":
-		c.send(response{Type: "account.snapshot", Data: s.currentSnapshot(), Timestamp: time.Now().UTC()})
+	switch req.Type {
+	case "list":
+		if err := s.ensureAccountEntity(req.Entity); err != nil {
+			c.send(requestError(req.Entity, req.RequestID, err))
+			return
+		}
+		c.send(snapshotResponse(req.RequestID, s.currentSnapshot()))
+	case "get":
+		if err := s.ensureAccountEntity(req.Entity); err != nil {
+			c.send(requestError(req.Entity, req.RequestID, err))
+			return
+		}
+		account, ok := s.manager.Cache().Get(req.ID)
+		if !ok {
+			c.send(requestError(req.Entity, req.RequestID, fmt.Errorf("account %q not found", req.ID)))
+			return
+		}
+		c.send(response{
+			Type:      "object",
+			RequestID: req.RequestID,
+			Entity:    "account",
+			Success:   true,
+			Data:      account,
+			Timestamp: time.Now().UTC(),
+		})
 	case "subscribe":
-		c.send(response{Type: "account.subscribed", Timestamp: time.Now().UTC()})
-	case "add_account":
+		if err := s.ensureAccountEntity(req.Entity); err != nil {
+			c.send(requestError(req.Entity, req.RequestID, err))
+			return
+		}
+		c.mu.Lock()
+		c.subscriptions["account"] = req.Generation
+		c.mu.Unlock()
+		c.send(response{
+			Type:       "subscribe.response",
+			RequestID:  req.RequestID,
+			Entity:     "account",
+			Success:    true,
+			Generation: s.currentGeneration(),
+			Timestamp:  time.Now().UTC(),
+		})
+		if req.Generation < s.currentGeneration() {
+			c.send(snapshotResponse("", s.currentSnapshot()))
+		}
+	case "unsubscribe":
+		if err := s.ensureAccountEntity(req.Entity); err != nil {
+			c.send(requestError(req.Entity, req.RequestID, err))
+			return
+		}
+		c.mu.Lock()
+		delete(c.subscriptions, "account")
+		c.mu.Unlock()
+		c.send(response{
+			Type:      "unsubscribe.response",
+			RequestID: req.RequestID,
+			Entity:    "account",
+			Success:   true,
+			Timestamp: time.Now().UTC(),
+		})
+	case "create":
 		payload, err := decodeAccountPayload(req.Payload)
 		if err != nil {
-			c.send(response{Type: "request.response", RequestID: req.RequestID, Status: "error", Error: err.Error(), Timestamp: time.Now().UTC()})
+			c.send(requestError(req.Entity, req.RequestID, err))
 			return
 		}
 		result, err := s.manager.AddAccount(ctx, req.RequestID, models.AccountCreateSpec{
@@ -155,39 +246,58 @@ func (s *Server) handleRequest(ctx context.Context, c *client, req request) {
 			Organization: payload.stringValue(payload.Organization),
 		})
 		c.send(accountResultResponse(req.RequestID, result, err))
-	case "modify_account":
+	case "update":
 		payload, err := decodeAccountPayload(req.Payload)
 		if err != nil {
-			c.send(response{Type: "request.response", RequestID: req.RequestID, Status: "error", Error: err.Error(), Timestamp: time.Now().UTC()})
+			c.send(requestError(req.Entity, req.RequestID, err))
 			return
 		}
 		accountName := payload.accountName()
+		if accountName == "" {
+			accountName = req.ID
+		}
 		result, err := s.manager.ModifyAccount(ctx, req.RequestID, accountName, models.AccountUpdateSpec{
 			Description:  payload.Description,
 			Organization: payload.Organization,
 		})
 		c.send(accountResultResponse(req.RequestID, result, err))
-	case "delete_account":
+	case "delete":
 		payload, err := decodeAccountPayload(req.Payload)
 		if err != nil {
-			c.send(response{Type: "request.response", RequestID: req.RequestID, Status: "error", Error: err.Error(), Timestamp: time.Now().UTC()})
+			c.send(requestError(req.Entity, req.RequestID, err))
 			return
 		}
-		result, err := s.manager.DeleteAccount(ctx, req.RequestID, payload.accountName())
+		accountName := payload.accountName()
+		if accountName == "" {
+			accountName = req.ID
+		}
+		result, err := s.manager.DeleteAccount(ctx, req.RequestID, accountName)
 		c.send(accountResultResponse(req.RequestID, result, err))
 	default:
-		c.send(response{Type: "request.response", RequestID: req.RequestID, Status: "error", Error: fmt.Sprintf("unknown action %q", req.Action), Timestamp: time.Now().UTC()})
+		c.send(requestError(req.Entity, req.RequestID, fmt.Errorf("unknown request type %q", req.Type)))
 	}
 }
 
-func (s *Server) currentSnapshot() map[string]interface{} {
-	accounts, generation := s.manager.Snapshot()
-	return map[string]interface{}{
-		"entity":     "account",
-		"generation": generation,
-		"accounts":   accounts,
-		"count":      len(accounts),
+func (s *Server) ensureAccountEntity(entity string) error {
+	if entity == "" || entity == "account" {
+		return nil
 	}
+	return fmt.Errorf("unsupported entity %q", entity)
+}
+
+func (s *Server) currentSnapshot() accountSnapshot {
+	accounts, generation := s.manager.Snapshot()
+	return accountSnapshot{
+		Entity:     "account",
+		Generation: generation,
+		Items:      accounts,
+		Count:      len(accounts),
+	}
+}
+
+func (s *Server) currentGeneration() uint64 {
+	_, generation := s.manager.Snapshot()
+	return generation
 }
 
 func (s *Server) addClient(c *client) {
@@ -206,6 +316,11 @@ func (s *Server) removeClient(c *client) {
 }
 
 func (s *Server) broadcast(evt bridgeaccount.Event) {
+	payload, ok := evt.Data.(bridgeentity.EntityEvent[models.Account])
+	if !ok || payload.Entity != "account" {
+		return
+	}
+
 	s.mu.Lock()
 	clients := make([]*client, 0, len(s.clients))
 	for _, c := range s.clients {
@@ -214,8 +329,36 @@ func (s *Server) broadcast(evt bridgeaccount.Event) {
 	s.mu.Unlock()
 
 	for _, c := range clients {
-		c.send(response{Type: evt.Type, Data: evt.Data, Timestamp: evt.Timestamp})
+		if !c.isSubscribed("account", payload.Generation) {
+			continue
+		}
+		c.send(response{
+			Type:       "event",
+			Entity:     "account",
+			Generation: payload.Generation,
+			Added:      payload.Added,
+			Modified:   payload.Modified,
+			Deleted:    payload.Deleted,
+			Timestamp:  evt.Timestamp,
+		})
+		c.setSubscriptionGeneration("account", payload.Generation)
 	}
+}
+
+func (c *client) isSubscribed(entity string, generation uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	seen, ok := c.subscriptions[entity]
+	return ok && generation > seen
+}
+
+func (c *client) setSubscriptionGeneration(entity string, generation uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.subscriptions == nil {
+		c.subscriptions = make(map[string]uint64)
+	}
+	c.subscriptions[entity] = generation
 }
 
 func (c *client) send(msg response) {
@@ -240,30 +383,53 @@ func (c *client) writeLoop() {
 	<-c.done
 }
 
-func decodeAccountPayload(raw json.RawMessage) (accountActionPayload, error) {
+func decodeAccountPayload(raw json.RawMessage) (accountRequestPayload, error) {
 	if len(raw) == 0 {
-		return accountActionPayload{}, nil
+		return accountRequestPayload{}, nil
 	}
 
-	var payload accountActionPayload
+	var payload accountRequestPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return accountActionPayload{}, fmt.Errorf("decode account payload: %w", err)
+		return accountRequestPayload{}, fmt.Errorf("decode account payload: %w", err)
 	}
 	return payload, nil
 }
 
-func (p accountActionPayload) accountName() string {
+func (p accountRequestPayload) accountName() string {
 	if p.Name != "" {
 		return p.Name
 	}
 	return p.AccountName
 }
 
-func (p accountActionPayload) stringValue(v *string) string {
+func (p accountRequestPayload) stringValue(v *string) string {
 	if v == nil {
 		return ""
 	}
 	return *v
+}
+
+func snapshotResponse(requestID string, snapshot accountSnapshot) response {
+	return response{
+		Type:       "snapshot",
+		RequestID:  requestID,
+		Entity:     snapshot.Entity,
+		Success:    true,
+		Generation: snapshot.Generation,
+		Items:      snapshot.Items,
+		Timestamp:  time.Now().UTC(),
+	}
+}
+
+func requestError(entity, requestID string, err error) response {
+	return response{
+		Type:      "error",
+		RequestID: requestID,
+		Entity:    entity,
+		Success:   false,
+		Error:     err.Error(),
+		Timestamp: time.Now().UTC(),
+	}
 }
 
 func accountResultResponse(requestID string, result bridgeaccount.RequestResult, err error) response {
@@ -271,17 +437,29 @@ func accountResultResponse(requestID string, result bridgeaccount.RequestResult,
 		return response{
 			Type:      "request.response",
 			RequestID: requestID,
-			Status:    "error",
+			Entity:    "account",
+			Success:   false,
 			Error:     err.Error(),
 			Timestamp: time.Now().UTC(),
 		}
 	}
 
 	return response{
-		Type:      "request.response",
-		RequestID: requestID,
-		Status:    result.Status,
-		Data:      result,
-		Timestamp: time.Now().UTC(),
+		Type:       "request.response",
+		RequestID:  requestID,
+		Entity:     "account",
+		Success:    true,
+		Status:     result.Status,
+		Generation: result.Generation,
+		Data:       result,
+		Timestamp:  time.Now().UTC(),
 	}
+}
+
+func newConnectionID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("conn-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
 }
