@@ -37,6 +37,8 @@ make
 
 # Installing
 
+## Install for system wide
+
 `make install` compiles and installs the package of dist built with directory of src for frontend files in `/usr/local/share/cockpit`. 
 
 install backend executable of cockpit-slurm-bridge and cockpit-slurm-channel for in path below: 
@@ -46,6 +48,7 @@ install backend executable of cockpit-slurm-bridge and cockpit-slurm-channel for
 and socket file to the path:
 `/run/cockpit-slurm/bridge.sock`
 
+## Install with RPM package
 For Redhat/RockyLinux RPM package of `production` mode, install front end dist directory to: 
 `/usr/share/cockpit` 
 and backend files to:
@@ -55,6 +58,8 @@ and backend files to:
 
 To start cockpit-slurm-bridge service in backend, run command 
 `sudo systemctl start cockpit-slurm-bridge`
+
+## Install for development user
 
 For development, you usually want to run your module straight out of the git
 tree. To do that, run `make devel-install`, which links your checkout to the
