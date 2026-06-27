@@ -143,18 +143,17 @@ export const Application = () => {
                 return;
             }
 
-            fetchSinfo()
-                .then((freshPayload) => {
-                    if (!isMounted) {
-                        return;
-                    }
+            (async () => {
+                const freshPayload = await fetchSinfo();
+                if (!isMounted) {
+                    return;
+                }
 
-                    setRows(freshPayload.rows ?? []);
-                    setUpdatedAt(freshPayload.updated_at ?? null);
-                })
-                .catch(() => {
-                    // Keep the current table contents if the refresh fails.
-                });
+                setRows(freshPayload.rows ?? []);
+                setUpdatedAt(freshPayload.updated_at ?? null);
+            })().catch(() => {
+                // Keep the current table contents if the refresh fails.
+            });
         });
 
         return () => {
@@ -192,9 +191,11 @@ export const Application = () => {
                         <>
                             <p>{cockpit.format(_('Last update: $0'), formatUpdatedAt(updatedAt))}</p>
 
-                            {rows.length === 0 ? (
+                            {rows.length === 0 && (
                                 <Alert variant="info" title={_('No sinfo rows are currently available.')} />
-                            ) : (
+                            )}
+
+                            {rows.length > 0 && (
                                 <Table variant="compact">
                                     <Thead>
                                         <Tr>

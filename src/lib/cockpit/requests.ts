@@ -3,27 +3,27 @@ import type { BridgeEntityName, BridgeRequest, BridgeRequestType } from '../../t
 import { createRequestId } from './channel';
 
 export function createBridgeRequest<TEntity extends BridgeEntityName, TPayload = unknown>(
-  type: BridgeRequestType,
-  entity: TEntity,
-  payload?: TPayload,
+    type: BridgeRequestType,
+    entity: TEntity,
+    payload?: TPayload,
 ): BridgeRequest<TEntity, TPayload> {
-  const request: BridgeRequest<TEntity, TPayload> = {
-    request_id: createRequestId(),
-    type,
-    entity,
-  };
+    const request: BridgeRequest<TEntity, TPayload> = {
+        request_id: createRequestId(),
+        type,
+        entity,
+    };
 
-  if (payload !== undefined) {
-    request.payload = payload;
-  }
+    if (payload !== undefined) {
+        request.payload = payload;
+    }
 
-  return request;
+    return request;
 }
 
 export function createEntitySubscribeRequest<TEntity extends BridgeEntityName>(entity: TEntity, generation?: number) {
-  const request = createBridgeRequest('subscribe', entity);
-  if (generation !== undefined) {
-    request.generation = generation;
-  }
-  return request;
+    const request = createBridgeRequest('subscribe', entity);
+    if (generation !== undefined) {
+        request.generation = generation;
+    }
+    return request;
 }
