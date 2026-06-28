@@ -1,0 +1,40 @@
+--- a/package.json
++++ b/package.json
+@@ -18,9 +18,9 @@
+   "devDependencies": {
+     "@types/react": "18.3.13",
+     "@types/react-dom": "18.3.1",
+-    "@typescript-eslint/eslint-plugin": "8.57.1",
+-    "esbuild-wasm": "0.28.0",
++    "@typescript-eslint/eslint-plugin": "8.62.0",
++    "esbuild-wasm": "0.28.1",
+     "eslint": "8.57.1",
+@@ -29,11 +29,11 @@
+     "eslint-plugin-promise": "6.6.0",
+     "eslint-plugin-react": "7.37.5",
+     "eslint-plugin-react-hooks": "4.6.2",
+-    "qunit": "2.25.0",
+-    "stylelint": "17.11.0",
++    "qunit": "2.26.0",
++    "stylelint": "17.14.0",
+     "stylelint-config-recommended-scss": "17.0.1",
+     "stylelint-config-standard": "40.0.0",
+     "stylelint-config-standard-scss": "17.0.0",
+     "stylelint-formatter-pretty": "4.0.1",
+-    "typescript": "5.9.3"
++    "typescript": "6.0.3"
+   },
+@@ -43,11 +43,11 @@
+     "@patternfly/react-core": "6.1.0",
+     "@patternfly/react-icons": "6.1.0",
+-    "@patternfly/react-styles": "6.5.0",
++    "@patternfly/react-styles": "6.5.1",
+     "@patternfly/react-table": "6.1.0",
+     "argparse": "2.0.1",
+-    "esbuild": "0.28.0",
++    "esbuild": "0.28.1",
+     "esbuild-sass-plugin": "3.7.0",
+     "gettext-parser": "9.0.2",
+     "react": "18.3.1",
+     "react-dom": "18.3.1"
+   }

@@ -9,11 +9,11 @@ import { createRoot } from 'react-dom/client';
 
 import "cockpit-dark-theme";
 
-import { Application } from './app.jsx';
+import { Application } from './app';
 
-// @ts-ignore: Cannot find module or type declarations for side-effect import
+// @ts-expect-error: PatternFly cockpit stylesheet is resolved at runtime
 import "patternfly/patternfly-6-cockpit.scss";
-// @ts-ignore: Cannot find module or type declarations for side-effect import
+// @ts-expect-error: app stylesheet is bundled by esbuild
 import './app.scss';
 
 document.addEventListener("DOMContentLoaded", () => {

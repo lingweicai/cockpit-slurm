@@ -5,35 +5,24 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Alert } from "@patternfly/react-core/dist/esm/components/Alert/index.js";
 import { Card, CardBody, CardTitle } from "@patternfly/react-core/dist/esm/components/Card/index.js";
-import { ExpandableRowContent, Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import cockpit from 'cockpit';
 
+import { AppShell } from './components/AppShell';
+import { getBreadcrumbTrail, getCurrentRole, getNavigationItems, normalizePageId, type AppPageId, type AppRole } from './app/navigation';
+import { ChannelProvider } from './lib/cockpit';
+import { ClusterOverviewPage } from './features/cluster';
+import { Dashboard } from './features/dashboard';
+import { AccountsPage, QosPage, ReportsPage, ReservationsPage, SettingsPage, UsersPage } from './features/admin';
+import { JobsPage } from './features/jobs';
+import { NodesPage } from './features/nodes';
+import { PartitionsPage } from './features/partitions';
+import { MyFilesPage, MyJobsPage, MyReservationsPage, SubmitJobPage } from './features/self-service';
 import type { SinfoPartitionRow } from './types/sinfo';
 import { fetchSinfo, subscribeSinfoUpdates } from './services/sinfoChannel';
 
 const _ = cockpit.gettext;
-
-type ExpandedState = Record<number, boolean>;
-
-function formatUpdatedAt(value: string | null) {
-    if (!value) {
-        return _('Unknown');
-    }
-
-    const timestamp = new Date(value);
-    if (Number.isNaN(timestamp.getTime())) {
-        return value;
-    }
-
-    return timestamp.toLocaleString();
-}
-
-function formatSummary(value: string | undefined | null, fallback = _('Unknown')) {
-    return value?.trim() || fallback;
-}
 
 const INITIAL_LOAD_RETRIES = 5;
 const INITIAL_LOAD_DELAY_MS = 500;
@@ -47,28 +36,94 @@ function isInitializedSinfoPayload(payload: { updated_at?: string | null }) {
     return Number.isFinite(timestamp) && timestamp > 0;
 }
 
-function renderDetails(row: SinfoPartitionRow) {
+function renderPlaceholderPage(title: string, description: string) {
     return (
-        <div style={{ display: 'grid', gap: '0.5rem' }}>
-            <div><strong>{_('Node list')}:</strong> {formatSummary(row.nodeList, _('N/A'))}</div>
-            <div><strong>{_('Node state')}:</strong> {formatSummary(row.nodeState)}</div>
-            <div><strong>{_('Partition state')}:</strong> {row.partitionState?.join(', ') || _('Unknown')}</div>
-            <div><strong>{_('Availability')}:</strong> {formatSummary(row.availability)}</div>
-            <div><strong>{_('Features')}:</strong> {formatSummary(row.featuresActive, _('N/A'))}</div>
-            <div><strong>{_('GRES used')}:</strong> {formatSummary(row.gresUsed, _('N/A'))}</div>
-            <div><strong>{_('Reservation')}:</strong> {formatSummary(row.reservation, _('N/A'))}</div>
-            <div><strong>{_('Comment')}:</strong> {formatSummary(row.comment, _('None'))}</div>
-            <div><strong>{_('Reason')}:</strong> {formatSummary(row.reasonDescription, _('N/A'))}</div>
-            <div><strong>{_('Reason user')}:</strong> {formatSummary(row.reasonUser, _('N/A'))}</div>
-            <div><strong>{_('Reason time')}:</strong> {row.reasonTime || _('N/A')}</div>
-            <div><strong>{_('Time limit')}:</strong> {formatSummary(row.timeLimit, _('N/A'))}</div>
-            <div><strong>{_('Partition TRES')}:</strong> {formatSummary(row.partitionTRES, _('N/A'))}</div>
-            <div><strong>{_('Memory free min/max')}:</strong> {row.memoryFreeMin} / {row.memoryFreeMax}</div>
-            <div><strong>{_('Memory allocated')}:</strong> {row.memoryAllocated}</div>
-            <div><strong>{_('CPU totals')}:</strong> {row.cpusTotal} ({_('allocated')} {row.cpusAllocated}, {_('idle')} {row.cpusIdle}, {_('other')} {row.cpusOther})</div>
-            <div><strong>{_('Node totals')}:</strong> {row.nodesTotal} ({_('allocated')} {row.nodesAllocated}, {_('idle')} {row.nodesIdle}, {_('other')} {row.nodesOther})</div>
-        </div>
+        <Card>
+            <CardTitle>{title}</CardTitle>
+            <CardBody>
+                <p>{description}</p>
+            </CardBody>
+        </Card>
     );
+}
+
+function renderPageContent(
+    pageId: AppPageId,
+    role: AppRole,
+    state: {
+        loading: boolean;
+        rows: SinfoPartitionRow[];
+        updatedAt: string | null;
+        waitMessage: string | null;
+        error: string | null;
+    },
+) {
+    switch (pageId) {
+    case 'dashboard':
+        return (
+            <Dashboard
+                loading={state.loading}
+                rows={state.rows}
+                updatedAt={state.updatedAt}
+                waitMessage={state.waitMessage}
+                error={state.error}
+            />
+        );
+    case 'partitions':
+        return (
+            <PartitionsPage
+                loading={state.loading}
+                rows={state.rows}
+                updatedAt={state.updatedAt}
+                waitMessage={state.waitMessage}
+                error={state.error}
+            />
+        );
+    case 'nodes':
+        return (
+            <NodesPage
+                loading={state.loading}
+                rows={state.rows}
+                updatedAt={state.updatedAt}
+                waitMessage={state.waitMessage}
+                error={state.error}
+            />
+        );
+    case 'cluster-overview':
+        return (
+            <ClusterOverviewPage
+                loading={state.loading}
+                rows={state.rows}
+                updatedAt={state.updatedAt}
+                waitMessage={state.waitMessage}
+                error={state.error}
+            />
+        );
+    case 'jobs':
+        return <JobsPage role={role} />;
+    case 'my-jobs':
+        return <MyJobsPage />;
+    case 'submit-job':
+        return <SubmitJobPage />;
+    case 'my-reservations':
+        return <MyReservationsPage />;
+    case 'my-files':
+        return <MyFilesPage />;
+    case 'users':
+        return <UsersPage />;
+    case 'accounts':
+        return <AccountsPage />;
+    case 'qos':
+        return <QosPage />;
+    case 'reservations':
+        return <ReservationsPage />;
+    case 'reports':
+        return <ReportsPage />;
+    case 'settings':
+        return <SettingsPage />;
+    default:
+        return renderPlaceholderPage(_('Dashboard'), _('Cluster health and summary widgets will be added here next.'));
+    }
 }
 
 export const Application = () => {
@@ -77,7 +132,16 @@ export const Application = () => {
     const [loading, setLoading] = useState(true);
     const [waitMessage, setWaitMessage] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [expandedRows, setExpandedRows] = useState<ExpandedState>({});
+    const [channelKey, setChannelKey] = useState(0);
+    const [activeCluster, setActiveCluster] = useState('production');
+    const [pageId, setPageId] = useState<AppPageId>(() => {
+        const role = getCurrentRole();
+        const currentHash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '') : null;
+        return normalizePageId(currentHash, role);
+    });
+    const role = getCurrentRole();
+    const navigationItems = getNavigationItems(role);
+    const clusterOptions = ['production', 'gpu', 'testing'];
 
     useEffect(() => {
         let isMounted = true;
@@ -134,25 +198,24 @@ export const Application = () => {
             }
         };
 
-        void loadSinfo();
+        loadSinfo();
 
         const unsubscribe = subscribeSinfoUpdates((payload) => {
             if (payload?.type !== 'sinfo.updated') {
                 return;
             }
 
-            void fetchSinfo()
-                .then((freshPayload) => {
-                    if (!isMounted) {
-                        return;
-                    }
+            (async () => {
+                const freshPayload = await fetchSinfo();
+                if (!isMounted) {
+                    return;
+                }
 
-                    setRows(freshPayload.rows ?? []);
-                    setUpdatedAt(freshPayload.updated_at ?? null);
-                })
-                .catch(() => {
-                    // Keep the current table contents if the refresh fails.
-                });
+                setRows(freshPayload.rows ?? []);
+                setUpdatedAt(freshPayload.updated_at ?? null);
+            })().catch(() => {
+                // Keep the current table contents if the refresh fails.
+            });
         });
 
         return () => {
@@ -161,84 +224,46 @@ export const Application = () => {
         };
     }, []);
 
-    const handleToggle = (rowIndex: number) => {
-        setExpandedRows((current) => ({
-            ...current,
-            [rowIndex]: !current[rowIndex],
-        }));
-    };
+    useEffect(() => {
+        const onHashChange = () => {
+            setPageId(normalizePageId(window.location.hash.replace(/^#/, ''), role));
+        };
+
+        window.addEventListener('hashchange', onHashChange);
+        onHashChange();
+
+        return () => {
+            window.removeEventListener('hashchange', onHashChange);
+        };
+    }, [role]);
 
     return (
-        <Card>
-            <CardTitle>{_('Sinfo partitions')}</CardTitle>
-            <CardBody>
-                <p> lwc test --- 08:30 </p>
-                {loading && !rows.length && (
-                    <>
-                        <Alert variant="info" title={_('Loading sinfo data from the bridge cache...')} />
-                        {waitMessage && <p>{waitMessage}</p>}
-                    </>
-                )}
-                {error && (
-                    <Alert variant="danger" title={_('Unable to load sinfo data')}>
-                        {error}
-                    </Alert>
-                )}
-
-                {!loading && !error && (
-                    <>
-                        <p>{cockpit.format(_('Last update: $0'), formatUpdatedAt(updatedAt))}</p>
-
-                        {rows.length === 0 ? (
-                            <Alert variant="info" title={_('No sinfo rows are currently available.')} />
-                        ) : (
-                            <Table variant="compact">
-                                <Thead>
-                                    <Tr>
-                                        <Th screenReaderText={_('Expand row')} />
-                                        <Th>{_('Partition')}</Th>
-                                        <Th>{_('State')}</Th>
-                                        <Th>{_('Nodes')}</Th>
-                                        <Th>{_('CPUs')}</Th>
-                                        <Th>{_('Memory')}</Th>
-                                        <Th>{_('Availability')}</Th>
-                                    </Tr>
-                                </Thead>
-                                {rows.map((row, rowIndex) => {
-                                    const isExpanded = Boolean(expandedRows[rowIndex]);
-
-                                    return (
-                                        <Tbody key={row.partitionName} isExpanded={isExpanded}>
-                                            <Tr>
-                                                <Td
-                                                    expand={{
-                                                        isExpanded,
-                                                        rowIndex,
-                                                        onToggle: () => handleToggle(rowIndex),
-                                                    }}
-                                                />
-                                                <Td dataLabel={_('Partition')}>{row.partitionName}</Td>
-                                                <Td dataLabel={_('State')}>{row.partitionState?.join(', ') || _('Unknown')}</Td>
-                                                <Td dataLabel={_('Nodes')}>{row.nodesAllocated}/{row.nodesTotal}</Td>
-                                                <Td dataLabel={_('CPUs')}>{row.cpusAllocated}/{row.cpusTotal}</Td>
-                                                <Td dataLabel={_('Memory')}>{row.memoryAllocated}</Td>
-                                                <Td dataLabel={_('Availability')}>{row.availability}</Td>
-                                            </Tr>
-                                            <Tr isExpanded={isExpanded}>
-                                                <Td colSpan={7}>
-                                                    <ExpandableRowContent>
-                                                        {renderDetails(row)}
-                                                    </ExpandableRowContent>
-                                                </Td>
-                                            </Tr>
-                                        </Tbody>
-                                    );
-                                })}
-                            </Table>
-                        )}
-                    </>
-                )}
-            </CardBody>
-        </Card>
+        <ChannelProvider key={channelKey}>
+            <AppShell
+                role={role}
+                pageId={pageId}
+                navigationItems={navigationItems}
+                breadcrumbs={getBreadcrumbTrail(role, pageId)}
+                activeCluster={activeCluster}
+                clusterOptions={clusterOptions}
+                onClusterChange={setActiveCluster}
+                onRefresh={() => setChannelKey((current) => current + 1)}
+                onNavigate={(nextPageId) => {
+                    const nextHash = `#${nextPageId}`;
+                    if (window.location.hash !== nextHash) {
+                        window.location.hash = nextHash;
+                    }
+                    setPageId(nextPageId);
+                }}
+            >
+                {renderPageContent(pageId, role, {
+                    loading,
+                    rows,
+                    updatedAt,
+                    waitMessage,
+                    error,
+                })}
+            </AppShell>
+        </ChannelProvider>
     );
 };
