@@ -1,0 +1,1 @@
+export { PartitionsPage } from './PartitionsPage';

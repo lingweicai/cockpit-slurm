@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert } from '@patternfly/react-core';
+import { Alert, Button } from '@patternfly/react-core';
 
 import cockpit from 'cockpit';
 
@@ -23,7 +23,7 @@ function formatConnectionLabel(status: string) {
 }
 
 export const ConnectionBanner = () => {
-    const { status, error, lastConnectedAt, lastMessageAt } = useChannelContext();
+    const { status, error, lastConnectedAt, lastMessageAt, reconnect } = useChannelContext();
 
     const title = formatConnectionLabel(status);
     const details = [
@@ -43,7 +43,20 @@ export const ConnectionBanner = () => {
     const variant = status === 'error' || status === 'closed' ? 'danger' : 'info';
 
     return (
-        <Alert variant={variant} isInline title={title}>
+        <Alert
+            variant={variant}
+            isInline
+            title={title}
+            action={
+                status === 'error' || status === 'closed'
+                    ? (
+                        <Button variant="secondary" onClick={reconnect}>
+                            {_('Reconnect')}
+                        </Button>
+                    )
+                    : undefined
+            }
+        >
             {details.join(' · ') || _('Waiting for bridge data...')}
         </Alert>
     );
