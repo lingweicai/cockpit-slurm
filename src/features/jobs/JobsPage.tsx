@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
     Alert,
     Badge,
@@ -23,7 +23,9 @@ import cockpit from 'cockpit';
 
 import type { AppRole } from '../../app/navigation';
 import type { JobRecord, JobState } from '../../types/job';
-import { JOB_FIXTURES } from './jobsData';
+import type { SlurmJob } from '../../types/slurm-api';
+import { fetchJobs, subscribeJobsUpdates } from '../../services/jobsChannel';
+import { applySlurmJobsDelta, resolveJobRows } from './jobsData';
 
 const _ = cockpit.gettext;
 
@@ -191,20 +193,63 @@ function DrawerDetails({ job, tabKey, setTabKey }: { job: JobRecord; tabKey: Dra
 }
 
 export const JobsPage = ({ role }: JobsPageProps) => {
+    const [jobsPayload, setJobsPayload] = useState<{ jobs: SlurmJob[] } | null>(null);
     const [query, setQuery] = useState('');
     const [stateFilter, setStateFilter] = useState<'ALL' | JobState>('ALL');
     const [sortKey, setSortKey] = useState<SortKey>('state');
     const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
-    const [selectedJobId, setSelectedJobId] = useState<string | null>(JOB_FIXTURES[0]?.jobId ?? null);
+    const jobs = useMemo(() => resolveJobRows(jobsPayload), [jobsPayload]);
+    const [selectedJobId, setSelectedJobId] = useState<string | null>(jobs[0]?.jobId ?? null);
     const [drawerTab, setDrawerTab] = useState<DrawerTabKey>('general');
 
+    useEffect(() => {
+        let isMounted = true;
+
+        const loadJobs = async () => {
+            try {
+                const payload = await fetchJobs();
+                if (!isMounted) {
+                    return;
+                }
+
+                setJobsPayload(payload);
+            } catch {
+                // Keep fixtures if live fetch fails.
+            }
+        };
+
+        loadJobs();
+
+        const unsubscribe = subscribeJobsUpdates((_event, delta) => {
+            if (delta) {
+                setJobsPayload((current) => applySlurmJobsDelta(current, delta));
+                return;
+            }
+
+            loadJobs().catch(() => {
+                // Keep current data if refresh fails.
+            });
+        });
+
+        return () => {
+            isMounted = false;
+            unsubscribe();
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!selectedJobId || !jobs.some((job) => job.jobId === selectedJobId)) {
+            setSelectedJobId(jobs[0]?.jobId ?? null);
+        }
+    }, [jobs, selectedJobId]);
+
     const filteredJobs = useMemo(() => {
-        return JOB_FIXTURES
+        return jobs
                 .slice()
                 .filter((job) => (stateFilter === 'ALL' ? true : job.state === stateFilter))
                 .filter((job) => matchesFilter(job, query))
                 .sort((left, right) => compareJobs(left, right, sortKey, sortDirection));
-    }, [query, sortDirection, sortKey, stateFilter]);
+    }, [jobs, query, sortDirection, sortKey, stateFilter]);
 
     const selectedJob = filteredJobs.find((job) => job.jobId === selectedJobId) ?? filteredJobs[0] ?? null;
     const summary = useMemo(() => buildSummary(filteredJobs), [filteredJobs]);

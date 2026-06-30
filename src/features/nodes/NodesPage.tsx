@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
     Card,
     CardBody,
@@ -15,8 +15,11 @@ import cockpit from 'cockpit';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
 import { LoadingState } from '../../components/LoadingState';
+import { fetchNodes, subscribeNodeUpdates } from '../../services/nodesChannel';
 import type { SinfoPartitionRow } from '../../types/sinfo';
+import type { SlurmNode } from '../../types/slurm-api';
 import { buildNodeSummaries, groupNodesByPrefix } from '../cluster/clusterData';
+import { applySlurmNodesDelta, resolveNodeSummaries } from './nodesData';
 
 const _ = cockpit.gettext;
 
@@ -41,9 +44,52 @@ function formatPercent(numerator: number, denominator: number) {
 }
 
 export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error }: NodesPageProps) => {
+    const [nodesPayload, setNodesPayload] = useState<{ nodes: SlurmNode[] } | null>(null);
     const [selectedNode, setSelectedNode] = useState<string | null>(null);
-    const nodes = useMemo(() => buildNodeSummaries(rows), [rows]);
+    const nodes = useMemo(() => {
+        const liveNodes = resolveNodeSummaries(nodesPayload);
+        if (liveNodes.length > 0) {
+            return liveNodes;
+        }
+
+        return buildNodeSummaries(rows);
+    }, [nodesPayload, rows]);
     const groups = useMemo(() => groupNodesByPrefix(nodes), [nodes]);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const loadNodes = async () => {
+            try {
+                const payload = await fetchNodes();
+                if (!isMounted) {
+                    return;
+                }
+
+                setNodesPayload(payload);
+            } catch {
+                // Keep sinfo-derived fallback if live node fetch fails.
+            }
+        };
+
+        loadNodes();
+
+        const unsubscribe = subscribeNodeUpdates((_event, delta) => {
+            if (delta) {
+                setNodesPayload((current) => applySlurmNodesDelta(current, delta));
+                return;
+            }
+
+            loadNodes().catch(() => {
+                // Keep current node view if refresh fails.
+            });
+        });
+
+        return () => {
+            isMounted = false;
+            unsubscribe();
+        };
+    }, []);
 
     const selected = useMemo(() => nodes.find((node) => node.name === selectedNode) ?? null, [nodes, selectedNode]);
     const totalNodes = nodes.length;

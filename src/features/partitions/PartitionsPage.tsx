@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
     Card,
     CardBody,
@@ -13,8 +13,11 @@ import cockpit from 'cockpit';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
 import { LoadingState } from '../../components/LoadingState';
+import { fetchPartitions, subscribePartitionUpdates } from '../../services/partitionsChannel';
 import type { SinfoPartitionRow } from '../../types/sinfo';
+import type { SlurmPartition } from '../../types/slurm-api';
 import { buildPartitionSummaries } from '../cluster/clusterData';
+import { applySlurmPartitionsDelta, resolvePartitionSummaries } from './partitionsData';
 
 const _ = cockpit.gettext;
 
@@ -36,8 +39,51 @@ function isDegradedPartition(row: SinfoPartitionRow) {
 }
 
 export const PartitionsPage = ({ loading, rows, updatedAt, waitMessage, error }: PartitionsPageProps) => {
+    const [partitionsPayload, setPartitionsPayload] = useState<{ partitions: SlurmPartition[] } | null>(null);
     const [expandedPartition, setExpandedPartition] = useState<string | null>(null);
-    const summaries = useMemo(() => buildPartitionSummaries(rows), [rows]);
+    const summaries = useMemo(() => {
+        const liveSummaries = resolvePartitionSummaries(partitionsPayload);
+        if (liveSummaries.length > 0) {
+            return liveSummaries;
+        }
+
+        return buildPartitionSummaries(rows);
+    }, [partitionsPayload, rows]);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const loadPartitions = async () => {
+            try {
+                const payload = await fetchPartitions();
+                if (!isMounted) {
+                    return;
+                }
+
+                setPartitionsPayload(payload);
+            } catch {
+                // Keep sinfo-derived fallback if live partition fetch fails.
+            }
+        };
+
+        loadPartitions();
+
+        const unsubscribe = subscribePartitionUpdates((_event, delta) => {
+            if (delta) {
+                setPartitionsPayload((current) => applySlurmPartitionsDelta(current, delta));
+                return;
+            }
+
+            loadPartitions().catch(() => {
+                // Keep current partition view if refresh fails.
+            });
+        });
+
+        return () => {
+            isMounted = false;
+            unsubscribe();
+        };
+    }, []);
 
     const metrics = useMemo(() => {
         const degraded = rows.filter(isDegradedPartition).length;
@@ -119,7 +165,7 @@ export const PartitionsPage = ({ loading, rows, updatedAt, waitMessage, error }:
                                                         <div><strong>{_('Limits')}:</strong> {summary.limits}</div>
                                                         <div><strong>{_('Reservation')}:</strong> {summary.reservation}</div>
                                                         <div><strong>{_('Comment')}:</strong> {summary.comment}</div>
-                                                        <div><strong>{_('Partition TRES')}:</strong> {row.partitionTRES || _('N/A')}</div>
+                                                        <div><strong>{_('Partition TRES')}:</strong> {summary.partitionTRES || row.partitionTRES || _('N/A')}</div>
                                                     </div>
                                                 </Td>
                                             </Tr>
