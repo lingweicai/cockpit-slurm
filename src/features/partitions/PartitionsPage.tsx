@@ -6,17 +6,17 @@ import {
     Gallery,
     GalleryItem,
 } from '@patternfly/react-core';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import cockpit from 'cockpit';
 
 import { EmptyState } from '../../components/EmptyState';
+import { EntityTable, type EntityTableColumn } from '../../components/EntityTable';
 import { ErrorState } from '../../components/ErrorState';
 import { LoadingState } from '../../components/LoadingState';
 import { fetchPartitions, subscribePartitionUpdates } from '../../services/partitionsChannel';
 import type { SinfoPartitionRow } from '../../types/sinfo';
 import type { SlurmPartition } from '../../types/slurm-api';
-import { buildPartitionSummaries } from '../cluster/clusterData';
+import { buildPartitionSummaries, type PartitionSummary } from '../cluster/clusterData';
 import { applySlurmPartitionsDelta, resolvePartitionSummaries } from './partitionsData';
 
 const _ = cockpit.gettext;
@@ -95,6 +95,34 @@ export const PartitionsPage = ({ loading, rows, updatedAt, waitMessage, error }:
         ];
     }, [rows]);
 
+    const tableColumns: EntityTableColumn<PartitionSummary>[] = [
+        {
+            header: _('Partition'),
+            dataLabel: _('Partition'),
+            cell: (summary) => summary.partitionName,
+        },
+        {
+            header: _('State'),
+            dataLabel: _('State'),
+            cell: (summary) => summary.state,
+        },
+        {
+            header: _('Nodes'),
+            dataLabel: _('Nodes'),
+            cell: (summary) => summary.nodes,
+        },
+        {
+            header: _('CPUs'),
+            dataLabel: _('CPUs'),
+            cell: (summary) => summary.cpus,
+        },
+        {
+            header: _('Availability'),
+            dataLabel: _('Availability'),
+            cell: (summary) => summary.availability,
+        },
+    ];
+
     if (error) {
         return <ErrorState title={_('Unable to load partitions')} message={error} />;
     }
@@ -122,60 +150,33 @@ export const PartitionsPage = ({ loading, rows, updatedAt, waitMessage, error }:
             <Card>
                 <CardTitle>{_('Partition summary')}</CardTitle>
                 <CardBody>
-                    {rows.length === 0 && (
+                    {summaries.length === 0 && (
                         <EmptyState title={_('No partition rows are available.')} message={_('The bridge cache has not produced partition data yet.')} />
                     )}
-                    {rows.length > 0 && (
-                        <Table aria-label={_('Partition summary table')} variant="compact">
-                            <Thead>
-                                <Tr>
-                                    <Th screenReaderText={_('Expand row')} />
-                                    <Th>{_('Partition')}</Th>
-                                    <Th>{_('State')}</Th>
-                                    <Th>{_('Nodes')}</Th>
-                                    <Th>{_('CPUs')}</Th>
-                                    <Th>{_('Availability')}</Th>
-                                </Tr>
-                            </Thead>
-                            {summaries.map((summary, rowIndex) => {
-                                const row = rows.find((item) => item.partitionName === summary.partitionName);
-                                const isExpanded = expandedPartition === summary.partitionName;
-
-                                return (
-                                    <Tbody key={summary.partitionName} isExpanded={isExpanded}>
-                                        <Tr>
-                                            <Td
-                                                expand={{
-                                                    isExpanded,
-                                                    rowIndex,
-                                                    onToggle: () => setExpandedPartition(isExpanded ? null : summary.partitionName),
-                                                }}
-                                            />
-                                            <Td dataLabel={_('Partition')}>{summary.partitionName}</Td>
-                                            <Td dataLabel={_('State')}>{summary.state}</Td>
-                                            <Td dataLabel={_('Nodes')}>{summary.nodes}</Td>
-                                            <Td dataLabel={_('CPUs')}>{summary.cpus}</Td>
-                                            <Td dataLabel={_('Availability')}>{summary.availability}</Td>
-                                        </Tr>
-                                        {isExpanded && row && (
-                                            <Tr isExpanded>
-                                                <Td colSpan={6}>
-                                                    <div style={{ display: 'grid', gap: '0.5rem' }}>
-                                                        <div><strong>{_('Features')}:</strong> {summary.features}</div>
-                                                        <div><strong>{_('Limits')}:</strong> {summary.limits}</div>
-                                                        <div><strong>{_('Reservation')}:</strong> {summary.reservation}</div>
-                                                        <div><strong>{_('Comment')}:</strong> {summary.comment}</div>
-                                                        <div><strong>{_('Partition TRES')}:</strong> {summary.partitionTRES || row.partitionTRES || _('N/A')}</div>
-                                                    </div>
-                                                </Td>
-                                            </Tr>
-                                        )}
-                                    </Tbody>
-                                );
-                            })}
-                        </Table>
+                    {summaries.length > 0 && (
+                        <EntityTable
+                            ariaLabel={_('Partition summary table')}
+                            columns={tableColumns}
+                            rows={summaries}
+                            rowKey={(summary) => summary.partitionName}
+                            expandable={{
+                                expandedRowKey: expandedPartition,
+                                onToggle: (_summary, rowKey) => {
+                                    setExpandedPartition((current) => (current === rowKey ? null : rowKey));
+                                },
+                                renderExpandedContent: (summary) => (
+                                    <div style={{ display: 'grid', gap: '0.5rem' }}>
+                                        <div><strong>{_('Features')}:</strong> {summary.features}</div>
+                                        <div><strong>{_('Limits')}:</strong> {summary.limits}</div>
+                                        <div><strong>{_('Reservation')}:</strong> {summary.reservation}</div>
+                                        <div><strong>{_('Comment')}:</strong> {summary.comment}</div>
+                                        <div><strong>{_('Partition TRES')}:</strong> {summary.partitionTRES || _('N/A')}</div>
+                                    </div>
+                                ),
+                            }}
+                        />
                     )}
-                    {!loading && rows.length > 0 && (
+                    {!loading && summaries.length > 0 && (
                         <p>{cockpit.format(_('Last update: $0'), updatedAt ? new Date(updatedAt).toLocaleString() : _('Unknown'))}</p>
                     )}
                 </CardBody>

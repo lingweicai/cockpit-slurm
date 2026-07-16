@@ -17,11 +17,13 @@ import {
     TabTitleText,
     TextInput,
 } from '@patternfly/react-core';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import cockpit from 'cockpit';
 
 import type { AppRole } from '../../app/navigation';
+import { EntityTable, type EntityTableColumn } from '../../components/EntityTable';
+import { useTransientAlert } from '../../hooks/useTransientAlert';
+import { copyTextToClipboard } from '../../lib/clipboard';
 import type { JobRecord, JobState } from '../../types/job';
 import type { SlurmJob } from '../../types/slurm-api';
 import { fetchJobs, subscribeJobsUpdates } from '../../services/jobsChannel';
@@ -201,6 +203,7 @@ export const JobsPage = ({ role }: JobsPageProps) => {
     const jobs = useMemo(() => resolveJobRows(jobsPayload), [jobsPayload]);
     const [selectedJobId, setSelectedJobId] = useState<string | null>(jobs[0]?.jobId ?? null);
     const [drawerTab, setDrawerTab] = useState<DrawerTabKey>('general');
+    const { alert: actionMessage, showAlert: showActionMessage } = useTransientAlert();
 
     useEffect(() => {
         let isMounted = true;
@@ -254,17 +257,86 @@ export const JobsPage = ({ role }: JobsPageProps) => {
     const selectedJob = filteredJobs.find((job) => job.jobId === selectedJobId) ?? filteredJobs[0] ?? null;
     const summary = useMemo(() => buildSummary(filteredJobs), [filteredJobs]);
 
-    const tableRows = filteredJobs.map((job) => (
-        <Tr key={job.jobId} onClick={() => setSelectedJobId(job.jobId)}>
-            <Td dataLabel={_('JobID')}>{job.jobId}</Td>
-            <Td dataLabel={_('User')}>{job.user}</Td>
-            <Td dataLabel={_('Account')}>{job.account}</Td>
-            <Td dataLabel={_('Partition')}>{job.partition}</Td>
-            <Td dataLabel={_('State')}>{renderStateBadge(job.state)}</Td>
-            <Td dataLabel={_('Runtime')}>{job.runtime}</Td>
-            <Td dataLabel={_('Nodes')}>{job.nodes}</Td>
-        </Tr>
-    ));
+    const handleCopyAction = async (value: string, successMessage: string, failureMessage: string) => {
+        const copied = await copyTextToClipboard(value);
+
+        showActionMessage({
+            variant: copied ? 'success' : 'danger',
+            title: copied ? successMessage : failureMessage,
+        });
+    };
+
+    const handleSortChange = (nextSortKey: SortKey) => {
+        if (sortKey === nextSortKey) {
+            setSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
+            return;
+        }
+
+        setSortKey(nextSortKey);
+        setSortDirection('asc');
+    };
+    const tableColumns: EntityTableColumn<JobRecord>[] = [
+        {
+            header: _('JobID'),
+            dataLabel: _('JobID'),
+            cell: (job) => job.jobId,
+            sortable: {
+                isActive: sortKey === 'jobId',
+                direction: sortDirection,
+                onSort: () => handleSortChange('jobId'),
+            },
+        },
+        {
+            header: _('User'),
+            dataLabel: _('User'),
+            cell: (job) => job.user,
+            sortable: {
+                isActive: sortKey === 'user',
+                direction: sortDirection,
+                onSort: () => handleSortChange('user'),
+            },
+        },
+        {
+            header: _('Account'),
+            dataLabel: _('Account'),
+            cell: (job) => job.account,
+        },
+        {
+            header: _('Partition'),
+            dataLabel: _('Partition'),
+            cell: (job) => job.partition,
+            sortable: {
+                isActive: sortKey === 'partition',
+                direction: sortDirection,
+                onSort: () => handleSortChange('partition'),
+            },
+        },
+        {
+            header: _('State'),
+            dataLabel: _('State'),
+            cell: (job) => renderStateBadge(job.state),
+            sortable: {
+                isActive: sortKey === 'state',
+                direction: sortDirection,
+                onSort: () => handleSortChange('state'),
+            },
+        },
+        {
+            header: _('Runtime'),
+            dataLabel: _('Runtime'),
+            cell: (job) => job.runtime,
+            sortable: {
+                isActive: sortKey === 'runtime',
+                direction: sortDirection,
+                onSort: () => handleSortChange('runtime'),
+            },
+        },
+        {
+            header: _('Nodes'),
+            dataLabel: _('Nodes'),
+            cell: (job) => job.nodes,
+        },
+    ];
 
     return (
         <Drawer isExpanded={Boolean(selectedJob)} isInline>
@@ -296,13 +368,16 @@ export const JobsPage = ({ role }: JobsPageProps) => {
                         <CardTitle>{role === 'user' ? _('My jobs') : _('Jobs queue')}</CardTitle>
                         <CardBody>
                             <div style={{ display: 'grid', gap: '0.75rem', marginBottom: '1rem' }}>
+                                {actionMessage && (
+                                    <Alert isInline variant={actionMessage.variant} title={actionMessage.title} />
+                                )}
                                 <TextInput
                                     value={query}
                                     onChange={(_event, value) => setQuery(value)}
                                     aria-label={_('Search jobs')}
                                     placeholder={_('Search by job, user, account, partition, or state')}
                                 />
-                                <div style={{ display: 'grid', gap: '0.5rem', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+                                <div style={{ display: 'grid', gap: '0.5rem', gridTemplateColumns: 'repeat(1, minmax(0, 1fr))' }}>
                                     <label>
                                         <div>{_('State')}</div>
                                         <select value={stateFilter} onChange={(event) => setStateFilter(event.target.value as 'ALL' | JobState)}>
@@ -312,23 +387,6 @@ export const JobsPage = ({ role }: JobsPageProps) => {
                                             <option value="FAILED">{_('Failed')}</option>
                                             <option value="COMPLETED">{_('Completed')}</option>
                                             <option value="CANCELLED">{_('Cancelled')}</option>
-                                        </select>
-                                    </label>
-                                    <label>
-                                        <div>{_('Sort by')}</div>
-                                        <select value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)}>
-                                            <option value="state">{_('State')}</option>
-                                            <option value="jobId">{_('JobID')}</option>
-                                            <option value="user">{_('User')}</option>
-                                            <option value="partition">{_('Partition')}</option>
-                                            <option value="runtime">{_('Runtime')}</option>
-                                        </select>
-                                    </label>
-                                    <label>
-                                        <div>{_('Direction')}</div>
-                                        <select value={sortDirection} onChange={(event) => setSortDirection(event.target.value as SortDirection)}>
-                                            <option value="asc">{_('Ascending')}</option>
-                                            <option value="desc">{_('Descending')}</option>
                                         </select>
                                     </label>
                                 </div>
@@ -349,20 +407,58 @@ export const JobsPage = ({ role }: JobsPageProps) => {
                                 <Alert variant="info" title={_('No jobs match the current filters.')} />
                             )}
                             {filteredJobs.length > 0 && (
-                                <Table aria-label={_('Jobs queue table')} variant="compact">
-                                    <Thead>
-                                        <Tr>
-                                            <Th>{_('JobID')}</Th>
-                                            <Th>{_('User')}</Th>
-                                            <Th>{_('Account')}</Th>
-                                            <Th>{_('Partition')}</Th>
-                                            <Th>{_('State')}</Th>
-                                            <Th>{_('Runtime')}</Th>
-                                            <Th>{_('Nodes')}</Th>
-                                        </Tr>
-                                    </Thead>
-                                    <Tbody>{tableRows}</Tbody>
-                                </Table>
+                                <EntityTable
+                                    ariaLabel={_('Jobs queue table')}
+                                    columns={tableColumns}
+                                    rows={filteredJobs}
+                                    rowKey={(job) => job.jobId}
+                                    onRowClick={(job) => setSelectedJobId(job.jobId)}
+                                    selectedRowKey={selectedJob?.jobId ?? null}
+                                    rowActionsVariant="menu"
+                                    rowActionItems={(job) => [
+                                        {
+                                            id: 'details',
+                                            label: _('Details'),
+                                            onClick: () => setSelectedJobId(job.jobId),
+                                        },
+                                        {
+                                            id: 'copy-job-id',
+                                            label: _('Copy Job ID'),
+                                            onClick: () => {
+                                                handleCopyAction(
+                                                    job.jobId,
+                                                    cockpit.format(_('Copied Job ID $0 to clipboard.'), job.jobId),
+                                                    cockpit.format(_('Unable to copy Job ID $0.'), job.jobId),
+                                                ).catch(() => {
+                                                    showActionMessage({
+                                                        variant: 'danger',
+                                                        title: cockpit.format(_('Unable to copy Job ID $0.'), job.jobId),
+                                                    });
+                                                });
+                                            },
+                                        },
+                                        {
+                                            id: 'copy-job-command',
+                                            label: _('Copy Job Command'),
+                                            onClick: () => {
+                                                handleCopyAction(
+                                                    job.command,
+                                                    cockpit.format(_('Copied command for Job $0 to clipboard.'), job.jobId),
+                                                    cockpit.format(_('Unable to copy command for Job $0.'), job.jobId),
+                                                ).catch(() => {
+                                                    showActionMessage({
+                                                        variant: 'danger',
+                                                        title: cockpit.format(_('Unable to copy command for Job $0.'), job.jobId),
+                                                    });
+                                                });
+                                            },
+                                        },
+                                    ]}
+                                    pagination={{
+                                        defaultPerPage: 10,
+                                        perPageOptions: [10, 20, 50],
+                                    }}
+                                />
                             )}
                         </CardBody>
                     </Card>

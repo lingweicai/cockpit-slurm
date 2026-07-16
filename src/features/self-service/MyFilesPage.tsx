@@ -1,16 +1,39 @@
 import React, { useState } from 'react';
 import { Alert, Card, CardBody, CardTitle, FileUpload } from '@patternfly/react-core';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import cockpit from 'cockpit';
 
-import { FILES_FIXTURES } from './selfServiceData';
+import { EntityTable, type EntityTableColumn } from '../../components/EntityTable';
+import { FILES_FIXTURES, type FileRecord } from './selfServiceData';
 
 const _ = cockpit.gettext;
 
 export const MyFilesPage = () => {
     const [selectedFile, setSelectedFile] = useState('');
     const [uploadText, setUploadText] = useState('#!/bin/bash\n#SBATCH --job-name=example\n');
+
+    const columns: EntityTableColumn<FileRecord>[] = [
+        {
+            header: _('Path'),
+            dataLabel: _('Path'),
+            cell: (file) => file.path,
+        },
+        {
+            header: _('Type'),
+            dataLabel: _('Type'),
+            cell: (file) => file.kind,
+        },
+        {
+            header: _('Size'),
+            dataLabel: _('Size'),
+            cell: (file) => file.size,
+        },
+        {
+            header: _('Modified'),
+            dataLabel: _('Modified'),
+            cell: (file) => new Date(file.modifiedAt).toLocaleString(),
+        },
+    ];
 
     return (
         <div style={{ display: 'grid', gap: '1rem' }}>
@@ -39,31 +62,13 @@ export const MyFilesPage = () => {
             <Card>
                 <CardTitle>{_('My files')}</CardTitle>
                 <CardBody>
-                    {FILES_FIXTURES.length === 0 && (
-                        <Alert variant="info" title={_('No files are currently tracked.')} />
-                    )}
-                    {FILES_FIXTURES.length > 0 && (
-                        <Table aria-label={_('My files table')} variant="compact">
-                            <Thead>
-                                <Tr>
-                                    <Th>{_('Path')}</Th>
-                                    <Th>{_('Type')}</Th>
-                                    <Th>{_('Size')}</Th>
-                                    <Th>{_('Modified')}</Th>
-                                </Tr>
-                            </Thead>
-                            <Tbody>
-                                {FILES_FIXTURES.map((file) => (
-                                    <Tr key={file.path}>
-                                        <Td dataLabel={_('Path')}>{file.path}</Td>
-                                        <Td dataLabel={_('Type')}>{file.kind}</Td>
-                                        <Td dataLabel={_('Size')}>{file.size}</Td>
-                                        <Td dataLabel={_('Modified')}>{new Date(file.modifiedAt).toLocaleString()}</Td>
-                                    </Tr>
-                                ))}
-                            </Tbody>
-                        </Table>
-                    )}
+                    <EntityTable
+                        ariaLabel={_('My files table')}
+                        columns={columns}
+                        rows={FILES_FIXTURES}
+                        rowKey={(file) => file.path}
+                        emptyState={<Alert variant="info" title={_('No files are currently tracked.')} />}
+                    />
                 </CardBody>
             </Card>
         </div>
