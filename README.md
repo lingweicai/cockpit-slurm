@@ -224,6 +224,6 @@ fixes. Dependabot configuration is included in `.github/dependabot.yml`.
 
 # Further reading
 
- * The [Starter Kit announcement](https://cockpit-project.org/blog/cockpit-starter-kit.html) (upstream template)
+ * [Starter Kit announcement](https://cockpit-project.org/blog/cockpit-starter-kit.html) (upstream template)
  * [Cockpit Deployment and Developer documentation](https://cockpit-project.org/guide/latest/)
- * [Make your project easily discoverable](https://cockpit-project.org/blog/making-a-cockpit-application.html)
+ * [Slurm Documentation](https://slurm.schedmd.com/)
