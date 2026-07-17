@@ -11,22 +11,30 @@ import {
     FormSelect,
     FormSelectOption,
     Progress,
-    TextInput,
     TreeView,
 } from '@patternfly/react-core';
 
 import cockpit from 'cockpit';
 
+import { ActionFeedbackAlert } from '../../components/ActionFeedbackAlert';
 import { EmptyState } from '../../components/EmptyState';
-import { EntityTable, type EntityTableColumn } from '../../components/EntityTable';
+import { EntityTable, type EntityTableColumn, type EntityTableRowAction } from '../../components/EntityTable';
 import { EntityDrawer } from '../../components/EntityDrawer';
 import { ErrorState } from '../../components/ErrorState';
+import { ResetTableFiltersButton } from '../../components/ResetTableFiltersButton';
+import { SummaryMetricsGallery } from '../../components/SummaryMetricsGallery';
+import { TableEmptyMatchState } from '../../components/TableEmptyMatchState';
+import { TableToolbarActions } from '../../components/TableToolbarActions';
+import { TableToolbarField } from '../../components/TableToolbarField';
+import { useTransientAlert } from '../../hooks/useTransientAlert';
+import { buildCopyNameRowAction, buildDetailsRowAction } from '../../lib/rowActions';
 import { LoadingState } from '../../components/LoadingState';
 import { fetchNodes, subscribeNodeUpdates } from '../../services/nodesChannel';
 import type { SinfoPartitionRow } from '../../types/sinfo';
 import type { SlurmNode } from '../../types/slurm-api';
 import { buildNodeSummaries, groupNodesByPrefix } from '../cluster/clusterData';
 import { applySlurmNodesDelta, resolveNodeSummaries, type SlurmNodesPayload } from './nodesData';
+import { type NodeSortKey, matchesNodeFilter, useNodesTableState } from './useNodesTableState';
 
 const _ = cockpit.gettext;
 
@@ -37,9 +45,6 @@ type NodesPageProps = {
     waitMessage: string | null;
     error: string | null;
 };
-
-type NodeSortKey = 'name' | 'state' | 'cpus' | 'memory';
-type NodeSortDirection = 'asc' | 'desc';
 
 function formatCount(value: number) {
     return value.toLocaleString();
@@ -53,28 +58,6 @@ function formatPercent(numerator: number, denominator: number) {
     return Math.round((numerator / denominator) * 100);
 }
 
-function normalizeStateToken(state: string) {
-    return state
-            .split(/[,+]/)
-            .map((token) => token.trim().toUpperCase())
-            .find(Boolean) ?? 'UNKNOWN';
-}
-
-function matchesNodeQuery(node: { name: string; nodeState: string; partitions: string[]; features: string[] }, query: string) {
-    if (!query.trim()) {
-        return true;
-    }
-
-    const haystack = [
-        node.name,
-        node.nodeState,
-        node.partitions.join(' '),
-        node.features.join(' '),
-    ].join(' ').toLowerCase();
-
-    return haystack.includes(query.trim().toLowerCase());
-}
-
 type NodesTableRow = {
     name: string;
     nodeState: string;
@@ -84,13 +67,30 @@ type NodesTableRow = {
     availability: string;
 };
 
+function buildNodeRowActionItems(
+    node: NodesTableRow,
+    onSelectNode: (nodeName: string) => void,
+    showActionMessage: (alert: { variant: 'success' | 'danger' | 'warning' | 'info'; title: string }) => void,
+): EntityTableRowAction<NodesTableRow>[] {
+    return [
+        buildDetailsRowAction({
+            onClick: () => onSelectNode(node.name),
+        }),
+        buildCopyNameRowAction({
+            id: 'copy-node-name',
+            label: _('Copy Node Name'),
+            value: node.name,
+            successTitle: cockpit.format(_('Copied node name $0 to clipboard.'), node.name),
+            failureTitle: cockpit.format(_('Unable to copy node name $0.'), node.name),
+            showAlert: showActionMessage,
+        }),
+    ];
+}
+
 export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error }: NodesPageProps) => {
     const [nodesPayload, setNodesPayload] = useState<SlurmNodesPayload | null>(null);
     const [selectedNode, setSelectedNode] = useState<string | null>(null);
-    const [query, setQuery] = useState('');
-    const [stateFilter, setStateFilter] = useState('ALL');
-    const [sortKey, setSortKey] = useState<NodeSortKey>('name');
-    const [sortDirection, setSortDirection] = useState<NodeSortDirection>('asc');
+    const { alert: actionMessage, showAlert: showActionMessage } = useTransientAlert();
     const nodes = useMemo(() => {
         const liveNodes = resolveNodeSummaries(nodesPayload);
         if (liveNodes.length > 0) {
@@ -100,48 +100,21 @@ export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error }: Node
         return buildNodeSummaries(rows);
     }, [nodesPayload, rows]);
 
-    const stateOptions = useMemo(() => {
-        return ['ALL', ...Array.from(new Set(nodes.map((node) => normalizeStateToken(node.nodeState)))).sort()];
-    }, [nodes]);
-
-    const filteredNodes = useMemo(() => {
-        return nodes.filter((node) => {
-            const matchesState = stateFilter === 'ALL' || normalizeStateToken(node.nodeState) === stateFilter;
-            return matchesState && matchesNodeQuery(node, query);
-        });
-    }, [nodes, query, stateFilter]);
-
-    const sortedNodes = useMemo(() => {
-        const directionFactor = sortDirection === 'asc' ? 1 : -1;
-
-        return filteredNodes.slice().sort((left, right) => {
-            if (sortKey === 'cpus') {
-                return (left.cpus - right.cpus) * directionFactor;
-            }
-
-            if (sortKey === 'memory') {
-                return (left.memory - right.memory) * directionFactor;
-            }
-
-            if (sortKey === 'state') {
-                return left.nodeState.localeCompare(right.nodeState) * directionFactor;
-            }
-
-            return left.name.localeCompare(right.name) * directionFactor;
-        });
-    }, [filteredNodes, sortDirection, sortKey]);
+    const {
+        query,
+        setQuery,
+        stateFilter,
+        setStateFilter,
+        sortKey,
+        sortDirection,
+        stateOptions,
+        filteredNodes,
+        sortedNodes,
+        handleSortChange,
+        resetFilters,
+    } = useNodesTableState(nodes);
 
     const groups = useMemo(() => groupNodesByPrefix(sortedNodes), [sortedNodes]);
-
-    const handleSortChange = (nextSortKey: NodeSortKey) => {
-        if (sortKey === nextSortKey) {
-            setSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
-            return;
-        }
-
-        setSortKey(nextSortKey);
-        setSortDirection('asc');
-    };
 
     useEffect(() => {
         let isMounted = true;
@@ -214,7 +187,7 @@ export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error }: Node
             sortable: {
                 isActive: sortKey === 'name',
                 direction: sortDirection,
-                onSort: () => handleSortChange('name'),
+                onSort: () => handleSortChange('name' as NodeSortKey),
             },
         },
         {
@@ -224,7 +197,7 @@ export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error }: Node
             sortable: {
                 isActive: sortKey === 'state',
                 direction: sortDirection,
-                onSort: () => handleSortChange('state'),
+                onSort: () => handleSortChange('state' as NodeSortKey),
             },
         },
         {
@@ -239,7 +212,7 @@ export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error }: Node
             sortable: {
                 isActive: sortKey === 'cpus',
                 direction: sortDirection,
-                onSort: () => handleSortChange('cpus'),
+                onSort: () => handleSortChange('cpus' as NodeSortKey),
             },
         },
         {
@@ -249,7 +222,7 @@ export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error }: Node
             sortable: {
                 isActive: sortKey === 'memory',
                 direction: sortDirection,
-                onSort: () => handleSortChange('memory'),
+                onSort: () => handleSortChange('memory' as NodeSortKey),
             },
         },
         {
@@ -277,19 +250,7 @@ export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error }: Node
 
     return (
         <div style={{ display: 'grid', gap: '1rem' }}>
-            <Gallery hasGutter>
-                {summaryMetrics.map((metric) => (
-                    <GalleryItem key={metric.title}>
-                        <Card>
-                            <CardTitle>{metric.title}</CardTitle>
-                            <CardBody>
-                                <strong>{metric.value}</strong>
-                                <div>{metric.description}</div>
-                            </CardBody>
-                        </Card>
-                    </GalleryItem>
-                ))}
-            </Gallery>
+            <SummaryMetricsGallery metrics={summaryMetrics} />
 
             <Card>
                 <CardTitle>{_('Topology')}</CardTitle>
@@ -334,28 +295,10 @@ export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error }: Node
                         <Card>
                             <CardTitle>{_('Node inventory')}</CardTitle>
                             <CardBody>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem' }}>
-                                    <label>
-                                        <div>{_('Search nodes')}</div>
-                                        <TextInput
-                                            id="node-search"
-                                            value={query}
-                                            onChange={(_event, value) => setQuery(value)}
-                                            placeholder={_('Filter by node, partition, feature, or state')}
-                                        />
-                                    </label>
-                                    <label>
-                                        <div>{_('State')}</div>
-                                        <FormSelect id="node-state-filter" value={stateFilter} onChange={(_event, value) => setStateFilter(value)}>
-                                            {stateOptions.map((option) => (
-                                                <FormSelectOption key={option} value={option} label={option} />
-                                            ))}
-                                        </FormSelect>
-                                    </label>
-                                </div>
+                                <ActionFeedbackAlert alert={actionMessage} />
 
                                 {filteredNodes.length === 0 && (
-                                    <EmptyState title={_('No matching nodes')} message={_('Adjust the search or state filter to find nodes.')} />
+                                    <TableEmptyMatchState title={_('No matching nodes')} message={_('Adjust the search or state filter to find nodes.')} />
                                 )}
                                 {sortedNodes.length > 0 && (
                                     <EntityTable
@@ -365,9 +308,30 @@ export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error }: Node
                                         rowKey={(node) => node.name}
                                         onRowClick={(node) => setSelectedNode(node.name)}
                                         selectedRowKey={selected?.name ?? null}
+                                        rowActionsVariant="menu"
+                                        rowActionItems={(node) => buildNodeRowActionItems(node, setSelectedNode, showActionMessage)}
                                         pagination={{
                                             defaultPerPage: 10,
                                             perPageOptions: [10, 20, 50],
+                                        }}
+                                        toolbar={(
+                                            <TableToolbarActions>
+                                                <TableToolbarField label={_('State')}>
+                                                    <FormSelect id="node-state-filter" value={stateFilter} onChange={(_event, value) => setStateFilter(value)}>
+                                                        {stateOptions.map((option) => (
+                                                            <FormSelectOption key={option} value={option} label={option} />
+                                                        ))}
+                                                    </FormSelect>
+                                                </TableToolbarField>
+                                                <ResetTableFiltersButton onReset={resetFilters} />
+                                            </TableToolbarActions>
+                                        )}
+                                        filter={{
+                                            placeholder: _('Filter by node, partition, feature, or state'),
+                                            query,
+                                            onQueryChange: setQuery,
+                                            matches: matchesNodeFilter,
+                                            emptyState: <TableEmptyMatchState title={_('No matching nodes')} message={_('Adjust the search or state filter to find nodes.')} />,
                                         }}
                                     />
                                 )}

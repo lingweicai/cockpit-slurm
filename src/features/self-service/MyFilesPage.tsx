@@ -4,6 +4,7 @@ import { Alert, Card, CardBody, CardTitle, FileUpload } from '@patternfly/react-
 import cockpit from 'cockpit';
 
 import { EntityTable, type EntityTableColumn } from '../../components/EntityTable';
+import { TableEmptyMatchState } from '../../components/TableEmptyMatchState';
 import { FILES_FIXTURES, type FileRecord } from './selfServiceData';
 
 const _ = cockpit.gettext;
@@ -67,6 +68,20 @@ export const MyFilesPage = () => {
                         columns={columns}
                         rows={FILES_FIXTURES}
                         rowKey={(file) => file.path}
+                        filter={{
+                            placeholder: _('Filter files by path, type, or size'),
+                            matches: (file, query) => {
+                                const haystack = [file.path, file.kind, file.size, new Date(file.modifiedAt).toLocaleString()]
+                                        .join(' ')
+                                        .toLowerCase();
+                                return haystack.includes(query.trim().toLowerCase());
+                            },
+                            emptyState: <TableEmptyMatchState title={_('No files match the current filter.')} />,
+                        }}
+                        pagination={{
+                            defaultPerPage: 10,
+                            perPageOptions: [10, 20, 50],
+                        }}
                         emptyState={<Alert variant="info" title={_('No files are currently tracked.')} />}
                     />
                 </CardBody>

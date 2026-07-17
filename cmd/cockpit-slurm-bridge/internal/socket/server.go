@@ -283,12 +283,12 @@ func (s *Server) pollJobsOnce(ctx context.Context, broadcast bool) error {
 	}
 
 	s.mu.Lock()
-	changed := hash != "" && hash != s.jobHash
-	if s.jobHash == "" {
-		s.jobHash = hash
-		s.jobIndex = nextIndex
-		if s.jobGen == 0 {
-			s.jobGen = 1
+	changed := hash != "" && hash != s.jobState.Hash
+	if s.jobState.Hash == "" {
+		s.jobState.Hash = hash
+		s.jobState.Index = nextIndex
+		if s.jobState.Generation == 0 {
+			s.jobState.Generation = 1
 		}
 		s.mu.Unlock()
 		return nil
@@ -299,11 +299,11 @@ func (s *Server) pollJobsOnce(ctx context.Context, broadcast bool) error {
 		return nil
 	}
 
-	delta := diffJobs(s.jobIndex, nextIndex)
-	s.jobHash = hash
-	s.jobIndex = nextIndex
-	s.jobGen++
-	generation := s.jobGen
+	delta := diffJobs(s.jobState.Index, nextIndex)
+	s.jobState.Hash = hash
+	s.jobState.Index = nextIndex
+	s.jobState.Generation++
+	generation := s.jobState.Generation
 	clients := make([]*client, 0, len(s.clients))
 	for _, c := range s.clients {
 		clients = append(clients, c)
@@ -350,12 +350,12 @@ func (s *Server) pollNodesOnce(ctx context.Context, broadcast bool) error {
 	}
 
 	s.mu.Lock()
-	changed := hash != "" && hash != s.nodeHash
-	if s.nodeHash == "" {
-		s.nodeHash = hash
-		s.nodeIndex = nextIndex
-		if s.nodeGen == 0 {
-			s.nodeGen = 1
+	changed := hash != "" && hash != s.nodeState.Hash
+	if s.nodeState.Hash == "" {
+		s.nodeState.Hash = hash
+		s.nodeState.Index = nextIndex
+		if s.nodeState.Generation == 0 {
+			s.nodeState.Generation = 1
 		}
 		s.mu.Unlock()
 		return nil
@@ -366,11 +366,11 @@ func (s *Server) pollNodesOnce(ctx context.Context, broadcast bool) error {
 		return nil
 	}
 
-	delta := diffNodes(s.nodeIndex, nextIndex)
-	s.nodeHash = hash
-	s.nodeIndex = nextIndex
-	s.nodeGen++
-	generation := s.nodeGen
+	delta := diffNodes(s.nodeState.Index, nextIndex)
+	s.nodeState.Hash = hash
+	s.nodeState.Index = nextIndex
+	s.nodeState.Generation++
+	generation := s.nodeState.Generation
 	clients := make([]*client, 0, len(s.clients))
 	for _, c := range s.clients {
 		clients = append(clients, c)
@@ -417,12 +417,12 @@ func (s *Server) pollPartitionsOnce(ctx context.Context, broadcast bool) error {
 	}
 
 	s.mu.Lock()
-	changed := hash != "" && hash != s.partitionHash
-	if s.partitionHash == "" {
-		s.partitionHash = hash
-		s.partitionIndex = nextIndex
-		if s.partitionGen == 0 {
-			s.partitionGen = 1
+	changed := hash != "" && hash != s.partitionState.Hash
+	if s.partitionState.Hash == "" {
+		s.partitionState.Hash = hash
+		s.partitionState.Index = nextIndex
+		if s.partitionState.Generation == 0 {
+			s.partitionState.Generation = 1
 		}
 		s.mu.Unlock()
 		return nil
@@ -433,11 +433,11 @@ func (s *Server) pollPartitionsOnce(ctx context.Context, broadcast bool) error {
 		return nil
 	}
 
-	delta := diffPartitions(s.partitionIndex, nextIndex)
-	s.partitionHash = hash
-	s.partitionIndex = nextIndex
-	s.partitionGen++
-	generation := s.partitionGen
+	delta := diffPartitions(s.partitionState.Index, nextIndex)
+	s.partitionState.Hash = hash
+	s.partitionState.Index = nextIndex
+	s.partitionState.Generation++
+	generation := s.partitionState.Generation
 	clients := make([]*client, 0, len(s.clients))
 	for _, c := range s.clients {
 		clients = append(clients, c)
@@ -849,19 +849,19 @@ func (s *Server) currentGeneration(entity string) uint64 {
 	if entity == "job" {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return s.jobGen
+		return s.jobState.Generation
 	}
 
 	if entity == "node" {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return s.nodeGen
+		return s.nodeState.Generation
 	}
 
 	if entity == "partition" {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return s.partitionGen
+		return s.partitionState.Generation
 	}
 
 	_, generation := s.manager.Snapshot()

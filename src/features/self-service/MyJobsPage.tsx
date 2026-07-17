@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, Card, CardBody, CardTitle, Gallery, GalleryItem } from '@patternfly/react-core';
+import { Alert, Card, CardBody, CardTitle } from '@patternfly/react-core';
 
 import cockpit from 'cockpit';
 
 import { EntityTable, type EntityTableColumn } from '../../components/EntityTable';
+import { SummaryMetricsGallery } from '../../components/SummaryMetricsGallery';
 import { getCurrentUserName } from '../../lib/cockpit/session';
 import type { JobRecord } from '../../types/job';
 import { JOB_FIXTURES } from '../jobs/jobsData';
@@ -25,6 +26,12 @@ export const MyJobsPage = () => {
     const running = jobs.filter((job) => job.state === 'RUNNING').length;
     const pending = jobs.filter((job) => job.state === 'PENDING').length;
     const completed = jobs.filter((job) => job.state === 'COMPLETED').length;
+    const summaryMetrics = [
+        { title: _('My jobs'), value: formatCount(jobs.length) },
+        { title: _('Running'), value: formatCount(running) },
+        { title: _('Pending'), value: formatCount(pending) },
+        { title: _('Completed'), value: formatCount(completed) },
+    ];
 
     const sortedJobs = useMemo(() => {
         const directionFactor = sortDirection === 'asc' ? 1 : -1;
@@ -107,12 +114,7 @@ export const MyJobsPage = () => {
 
     return (
         <div style={{ display: 'grid', gap: '1rem' }}>
-            <Gallery hasGutter>
-                <GalleryItem><Card><CardTitle>{_('My jobs')}</CardTitle><CardBody><strong>{formatCount(jobs.length)}</strong></CardBody></Card></GalleryItem>
-                <GalleryItem><Card><CardTitle>{_('Running')}</CardTitle><CardBody><strong>{formatCount(running)}</strong></CardBody></Card></GalleryItem>
-                <GalleryItem><Card><CardTitle>{_('Pending')}</CardTitle><CardBody><strong>{formatCount(pending)}</strong></CardBody></Card></GalleryItem>
-                <GalleryItem><Card><CardTitle>{_('Completed')}</CardTitle><CardBody><strong>{formatCount(completed)}</strong></CardBody></Card></GalleryItem>
-            </Gallery>
+            <SummaryMetricsGallery metrics={summaryMetrics} />
 
             <Card>
                 <CardTitle>{cockpit.format(_('Jobs for $0'), currentUser)}</CardTitle>

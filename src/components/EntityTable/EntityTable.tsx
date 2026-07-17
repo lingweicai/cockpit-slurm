@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Dropdown, DropdownItem, MenuToggle, Pagination } from '@patternfly/react-core';
+import { Dropdown, DropdownItem, MenuToggle, Pagination, TextInput } from '@patternfly/react-core';
 import { ArrowDownIcon, ArrowUpIcon, ArrowsAltVIcon, EllipsisVIcon } from '@patternfly/react-icons';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
@@ -27,6 +27,7 @@ type EntityTableProps<TRow> = {
     columns: EntityTableColumn<TRow>[];
     rows: TRow[];
     rowKey: (row: TRow) => string;
+    toolbar?: React.ReactNode;
     onRowClick?: (row: TRow) => void;
     selectedRowKey?: string | null;
     variant?: 'compact';
@@ -47,6 +48,14 @@ type EntityTableProps<TRow> = {
     rowActions?: (row: TRow) => React.ReactNode;
     rowActionItems?: (row: TRow) => EntityTableRowAction<TRow>[];
     rowActionsVariant?: 'inline' | 'menu';
+    filter?: {
+        placeholder: string;
+        matches: (row: TRow, query: string) => boolean;
+        defaultQuery?: string;
+        query?: string;
+        onQueryChange?: (query: string) => void;
+        emptyState?: React.ReactNode;
+    };
 };
 
 export function EntityTable<TRow>({
@@ -54,6 +63,7 @@ export function EntityTable<TRow>({
     columns,
     rows,
     rowKey,
+    toolbar,
     onRowClick,
     selectedRowKey,
     variant = 'compact',
@@ -63,31 +73,46 @@ export function EntityTable<TRow>({
     rowActions,
     rowActionItems,
     rowActionsVariant = 'inline',
+    filter,
 }: EntityTableProps<TRow>) {
     const [internalPage, setInternalPage] = useState(1);
     const [internalPerPage, setInternalPerPage] = useState(pagination?.defaultPerPage ?? 10);
     const [openActionMenuRowKey, setOpenActionMenuRowKey] = useState<string | null>(null);
+    const [internalFilterQuery, setInternalFilterQuery] = useState(filter?.defaultQuery ?? '');
 
     const hasPagination = Boolean(pagination);
     const hasActionMenu = rowActionsVariant === 'menu' && typeof rowActionItems === 'function';
     const hasInlineActions = rowActionsVariant === 'inline' && typeof rowActions === 'function';
     const hasActionsColumn = hasActionMenu || hasInlineActions;
+    const filterQuery = filter?.query ?? internalFilterQuery;
+    const filteredRows = useMemo(() => {
+        if (!filter || !filterQuery.trim()) {
+            return rows;
+        }
+
+        return rows.filter((row) => filter.matches(row, filterQuery));
+    }, [filter, filterQuery, rows]);
+
     const currentPerPage = pagination?.perPage ?? internalPerPage;
-    const maxPage = Math.max(1, Math.ceil(rows.length / Math.max(currentPerPage, 1)));
+    const maxPage = Math.max(1, Math.ceil(filteredRows.length / Math.max(currentPerPage, 1)));
     const resolvedPage = Math.min(pagination?.page ?? internalPage, maxPage);
     const perPageOptions = pagination?.perPageOptions ?? [10, 20, 50, 100];
 
     const pagedRows = useMemo(() => {
         if (!hasPagination) {
-            return rows;
+            return filteredRows;
         }
 
         const startIndex = (resolvedPage - 1) * currentPerPage;
-        return rows.slice(startIndex, startIndex + currentPerPage);
-    }, [currentPerPage, hasPagination, resolvedPage, rows]);
+        return filteredRows.slice(startIndex, startIndex + currentPerPage);
+    }, [currentPerPage, filteredRows, hasPagination, resolvedPage]);
 
     if (rows.length === 0) {
         return <>{emptyState ?? null}</>;
+    }
+
+    if (filteredRows.length === 0) {
+        return <>{filter?.emptyState ?? emptyState ?? null}</>;
     }
 
     const onSetPage = (page: number) => {
@@ -109,6 +134,16 @@ export function EntityTable<TRow>({
         setInternalPage(1);
     };
 
+    const onFilterQueryChange = (value: string) => {
+        if (filter?.onQueryChange) {
+            filter.onQueryChange(value);
+        } else {
+            setInternalFilterQuery(value);
+        }
+
+        setInternalPage(1);
+    };
+
     function renderSortIcon(isActive: boolean, direction: 'asc' | 'desc') {
         if (!isActive) {
             return <ArrowsAltVIcon aria-hidden="true" />;
@@ -123,6 +158,21 @@ export function EntityTable<TRow>({
 
     return (
         <div style={{ display: 'grid', gap: '0.75rem' }}>
+            {(filter || toolbar) && (
+                <div className="entity-table__toolbar">
+                    {filter && (
+                        <div className="entity-table__toolbar-filter">
+                            <TextInput
+                                value={filterQuery}
+                                onChange={(_event, value) => onFilterQueryChange(value)}
+                                aria-label={filter.placeholder}
+                                placeholder={filter.placeholder}
+                            />
+                        </div>
+                    )}
+                    {toolbar && <div className="entity-table__toolbar-content">{toolbar}</div>}
+                </div>
+            )}
             <Table aria-label={ariaLabel} variant={variant}>
                 <Thead>
                     <Tr>
@@ -235,7 +285,7 @@ export function EntityTable<TRow>({
             </Table>
             {hasPagination && (
                 <Pagination
-                    itemCount={rows.length}
+                    itemCount={filteredRows.length}
                     page={resolvedPage}
                     perPage={currentPerPage}
                     perPageOptions={perPageOptions.map((option) => ({ title: String(option), value: option }))}

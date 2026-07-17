@@ -802,4 +802,109 @@ Can Data models for backend and front end.
 
 Can I use the slurmrestd openAPI output JSON file to declare (or alias ) types for front-end in PatternFly React ? 
 
+---
+
+# Implementation-Ready Frontend Migration Matrix
+
+This section converts the UI strategy into concrete delivery work tied to current files.
+
+| Scope | Current State | Target State | Primary Frontend Files | Exit Condition |
+| --- | --- | --- | --- | --- |
+| Channel protocol usage | Mixed canonical and legacy message patterns | Canonical request_id/type/entity/generation for all entities | src/services/entityChannel.ts, src/services/sinfoChannel.ts, src/types/bridge.ts | No action-based sinfo request path remains |
+| Sinfo flow | Sinfo can use action-style compatibility | Sinfo uses list + subscribe like other entities | src/services/sinfoChannel.ts | Sinfo snapshot/event are parsed only through canonical envelope |
+| Snapshot + event model | Implemented per feature with varying behavior | Shared behavior: initial snapshot then incremental events | src/services/entityChannel.ts, src/features/jobs/JobsPage.tsx, src/features/nodes/NodesPage.tsx, src/features/partitions/PartitionsPage.tsx | All entity pages follow same update pattern |
+| Generation gap handling | Not centralized as a hard rule | Shared detection and auto-resync list request | src/services/entityChannel.ts | Simulated missing generation triggers automatic refresh |
+| UI table consistency | Strong progress from EntityTable rollout | Complete parity for filtering/sorting/pagination/actions | src/components/EntityTable, src/features/*/*Page.tsx | All production list pages use shared table primitives |
+| Role navigation | Role-based nav exists | Role home pages include role-specific operational content | src/app/navigation.ts, src/app.tsx, src/features/dashboard | User/operator/admin landing pages differ meaningfully |
+| Type contract alignment | OpenAPI workflow documented | Generated types integrated into service layer adapters | scripts/generate-slurm-openapi-types.mjs, src/types, src/services | Type generation becomes repeatable and versioned |
+
+---
+
+# Legacy Sinfo Action Protocol Removal
+
+Remove legacy sinfo action protocol usage from frontend implementation guidance and code paths:
+
+* remove `{ "action": "get_sinfo" }`
+* remove `{ "action": "subscribe" }`
+* stop treating `sinfo.response` as the canonical success shape
+
+Required canonical sinfo requests:
+
+```json
+{
+    "request_id": "req-...",
+    "type": "list",
+    "entity": "sinfo"
+}
+```
+
+```json
+{
+    "request_id": "req-...",
+    "type": "subscribe",
+    "entity": "sinfo",
+    "generation": 0
+}
+```
+
+Required canonical sinfo response/event envelope:
+
+```json
+{
+    "request_id": "req-...",
+    "type": "snapshot",
+    "entity": "sinfo",
+    "generation": 1,
+    "payload": {
+        "rows": [],
+        "updated_at": "2026-01-01T00:00:00Z"
+    }
+}
+```
+
+```json
+{
+    "type": "event",
+    "entity": "sinfo",
+    "generation": 2,
+    "added": [],
+    "modified": [],
+    "deleted": []
+}
+```
+
+---
+
+# Frontend Acceptance Criteria
+
+## AC-FE-1 Protocol consistency
+
+1. Each entity service sends request_id/type/entity in every request.
+2. Sinfo follows the same envelope rules as jobs/nodes/partitions.
+3. No production UI flow requires action-based sinfo requests.
+
+## AC-FE-2 Update correctness
+
+1. Initial page load uses snapshot payload.
+2. Incremental events update only affected rows where possible.
+3. Generation gaps auto-trigger list resync for that entity.
+
+## AC-FE-3 Shared UX primitives
+
+1. Entity list pages use shared table/filter/toolbar/action components.
+2. Empty/loading/error states use standardized components.
+3. Details interactions use shared drawer/detail patterns where applicable.
+
+## AC-FE-4 Role UX
+
+1. User landing emphasizes self-service workloads.
+2. Operator landing emphasizes queue pressure and node health.
+3. Admin landing emphasizes control-plane and policy visibility.
+
+## AC-FE-5 Verification checklist
+
+1. `npm run build` passes.
+2. Manual inspection confirms no action-based sinfo requests are emitted.
+3. Simulated missing event generation recovers via automatic snapshot refresh.
+
 The data models file is at /home/dev/cockpit-slurm/cmd/internal/models/slurm-25.05.7-openapi-v0.0.43.json.

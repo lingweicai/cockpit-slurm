@@ -1,3 +1,30 @@
+.entity-table__toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: end;
+}
+
+.entity-table__toolbar-filter {
+    flex: 1 1 18rem;
+    min-width: 16rem;
+}
+
+.entity-table__toolbar-content {
+    flex: 1 1 auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: end;
+}
+
+.entity-table__toolbar-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: end;
+}
+
 .entity-table__sort-button {
     background: none;
     border: 1px solid transparent;

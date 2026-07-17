@@ -1,9 +1,10 @@
 import React, { useMemo } from 'react';
-import { Alert, Badge, Card, CardBody, CardTitle, Gallery, GalleryItem } from '@patternfly/react-core';
+import { Alert, Badge, Card, CardBody, CardTitle } from '@patternfly/react-core';
 
 import cockpit from 'cockpit';
 
 import { EntityTable, type EntityTableColumn } from '../../components/EntityTable';
+import { SummaryMetricsGallery } from '../../components/SummaryMetricsGallery';
 import { getCurrentUserName } from '../../lib/cockpit/session';
 import { RESERVATIONS_FIXTURES, type ReservationRecord } from './selfServiceData';
 
@@ -29,6 +30,11 @@ export const MyReservationsPage = () => {
     const reservations = useMemo(() => RESERVATIONS_FIXTURES.filter((reservation) => reservation.users.includes(currentUser)), [currentUser]);
     const active = reservations.filter((reservation) => reservation.state === 'ACTIVE').length;
     const upcoming = reservations.filter((reservation) => reservation.state === 'UPCOMING').length;
+    const summaryMetrics = [
+        { title: _('Reservations'), value: formatCount(reservations.length) },
+        { title: _('Active'), value: formatCount(active) },
+        { title: _('Upcoming'), value: formatCount(upcoming) },
+    ];
 
     const columns: EntityTableColumn<ReservationRecord>[] = [
         {
@@ -65,11 +71,7 @@ export const MyReservationsPage = () => {
 
     return (
         <div style={{ display: 'grid', gap: '1rem' }}>
-            <Gallery hasGutter>
-                <GalleryItem><Card><CardTitle>{_('Reservations')}</CardTitle><CardBody><strong>{formatCount(reservations.length)}</strong></CardBody></Card></GalleryItem>
-                <GalleryItem><Card><CardTitle>{_('Active')}</CardTitle><CardBody><strong>{formatCount(active)}</strong></CardBody></Card></GalleryItem>
-                <GalleryItem><Card><CardTitle>{_('Upcoming')}</CardTitle><CardBody><strong>{formatCount(upcoming)}</strong></CardBody></Card></GalleryItem>
-            </Gallery>
+            <SummaryMetricsGallery metrics={summaryMetrics} />
 
             <Card>
                 <CardTitle>{cockpit.format(_('My reservations for $0'), currentUser)}</CardTitle>

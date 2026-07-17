@@ -40,11 +40,9 @@ Cache Manager
 
 Slurm CLI Commands
 
-* sacctmgr
-* scontrol
-* sinfo
-* squeue
-* sreport
+* sacctmgr --json
+* scontrol --json
+* squeue --json
 
 ---
 
@@ -547,3 +545,116 @@ Add Node cache.
 Task 19
 
 Add Job cache.
+
+---
+
+# Sinfo Protocol Normalization (Required)
+
+The sinfo stream must use the same canonical protocol as other entities.
+
+Allowed request format:
+
+```json
+{
+    "request_id": "req-...",
+    "type": "list",
+    "entity": "sinfo"
+}
+```
+
+```json
+{
+    "request_id": "req-...",
+    "type": "subscribe",
+    "entity": "sinfo",
+    "generation": 0
+}
+```
+
+Allowed response/event format:
+
+```json
+{
+    "request_id": "req-...",
+    "type": "snapshot",
+    "entity": "sinfo",
+    "generation": 1,
+    "payload": {
+        "rows": [],
+        "updated_at": "2026-01-01T00:00:00Z"
+    }
+}
+```
+
+```json
+{
+    "type": "event",
+    "entity": "sinfo",
+    "generation": 2,
+    "added": [],
+    "modified": [],
+    "deleted": []
+}
+```
+
+Remove legacy sinfo action protocol usage everywhere:
+
+* do not send `{ "action": "get_sinfo" }`
+* do not send `{ "action": "subscribe" }`
+* do not rely on `sinfo.response` as the canonical response type
+
+Compatibility support in bridge/channel may exist only as temporary fallback during migration and must be removed at the end of Milestone M2.
+
+---
+
+# Migration Matrix (Implementation-Ready)
+
+| Workstream | Current State | Target State | Primary Files | Milestone |
+| --- | --- | --- | --- | --- |
+| Protocol envelope | Mixed message styles across entities | All requests/responses use request_id + type + entity + generation | cmd/cockpit-slurm-bridge/internal/socket, cmd/cockpit-slurm-channel, src/types/bridge.ts | M1 |
+| Sinfo transport | Legacy action-based requests in frontend | Sinfo uses list/subscribe canonical flow like jobs/nodes/partitions | src/services/sinfoChannel.ts, src/services/entityChannel.ts | M1 |
+| Event application | Some pages apply deltas, others full-refresh fallback | All entity pages apply diff deltas first, snapshot only on gap/error | src/features/*/*Page.tsx, src/services/*Channel.ts | M2 |
+| Generation gap handling | Not enforced as shared behavior | Shared detection and auto-resync when generation skips | src/services/entityChannel.ts | M2 |
+| Channel role | Mostly stateless but protocol compatibility mixed | Strict stateless pass-through, no cache/business logic | cmd/cockpit-slurm-channel | M1 |
+| Bridge cache ownership | Implemented conceptually | Fully enforced per-entity generation and dedupe routing | cmd/cockpit-slurm-bridge/internal | M2 |
+| Contract generation | OpenAPI guidance exists | Automated Go + TypeScript generation and CI drift check | cmd/internal/models, scripts/generate-slurm-openapi-types.mjs | M3 |
+
+Milestones:
+
+* M1: Canonical protocol unification.
+* M2: Reliable incremental updates and recovery.
+* M3: Contract automation and drift prevention.
+
+---
+
+# Acceptance Criteria
+
+## AC-1 Canonical protocol only
+
+1. All frontend entity requests (including sinfo) send request_id, type, and entity.
+2. No production path depends on action-based sinfo requests.
+3. Bridge returns snapshot/event/error envelope types for sinfo, jobs, nodes, partitions.
+
+## AC-2 Generation and recovery
+
+1. Frontend stores last generation per entity subscription.
+2. If generation jumps (n to n+2 or more), frontend automatically issues list for that entity.
+3. Recovered snapshot replaces local entity state without full app reload.
+
+## AC-3 Stateless channel
+
+1. Channel process has no cache structures and no Slurm command execution.
+2. Channel reconnect behavior is transparent to message envelope semantics.
+
+## AC-4 Entity parity
+
+1. jobs, nodes, partitions, reservations, and sinfo support list + subscribe with equivalent envelope fields.
+2. Each entity emits monotonic generation values.
+
+## AC-5 Verification checklist
+
+1. Bridge target builds successfully:
+   * `make cmd/cockpit-slurm-bridge/cockpit-slurm-bridge/cockpit-slurm-bridge`
+2. Frontend builds successfully:
+   * `npm run build`
+3. Manual protocol check confirms no action-based sinfo requests from UI.

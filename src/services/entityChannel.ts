@@ -8,6 +8,7 @@ import {
     sendJsonLine,
 } from '../lib/cockpit';
 import { parseBridgeMessages } from '../lib/cockpit/parser';
+import { shouldResyncForGenerationGap } from './entityGeneration';
 
 type ExtractPayload<TPayload> = (message: BridgeEnvelope) => TPayload | null;
 
@@ -48,6 +49,23 @@ function defaultShouldHandleMessage(entity: string, message: BridgeEnvelope) {
 
     const record = message as Record<string, unknown>;
     return record.type === 'event' && (record.entity === entity || record.entity === `${entity}s`);
+}
+
+function entityMatches(messageEntity: unknown, entity: string) {
+    return messageEntity === entity || messageEntity === `${entity}s`;
+}
+
+function readEventGeneration(entity: string, message: BridgeEnvelope): number | null {
+    if (!message || typeof message !== 'object') {
+        return null;
+    }
+
+    const record = message as Record<string, unknown>;
+    if (record.type !== 'event' || !entityMatches(record.entity, entity)) {
+        return null;
+    }
+
+    return typeof record.generation === 'number' ? record.generation : null;
 }
 
 function normalizeCloseMessage(event: unknown, fallbackMessage: string) {
@@ -131,11 +149,29 @@ export async function fetchEntitySnapshot<TPayload>({ entity, extractPayload, cl
 export function subscribeEntityUpdates<TDelta>({ entity, extractDelta, callback, shouldHandleMessage, generation = 0 }: EntitySubscribeOptions<TDelta>) {
     const channel = openBridgeChannel();
     const shouldHandle = shouldHandleMessage ?? ((message: BridgeEnvelope) => defaultShouldHandleMessage(entity, message));
+    let lastSeenGeneration = Math.max(0, generation);
 
     const onMessage = (data: unknown) => {
         const messages = parseBridgeMessages(data);
         for (const message of messages) {
             if (shouldHandle(message)) {
+                const currentGeneration = readEventGeneration(entity, message);
+                if (currentGeneration !== null) {
+                    const hasGenerationGap = shouldResyncForGenerationGap(lastSeenGeneration, currentGeneration);
+                    lastSeenGeneration = currentGeneration;
+
+                    if (hasGenerationGap) {
+                        // Recover entity state via canonical snapshot request when one or more events were missed.
+                        sendJsonLine(channel, {
+                            request_id: createRequestId(),
+                            type: 'list',
+                            entity,
+                        });
+                        callback(message, null);
+                        continue;
+                    }
+                }
+
                 callback(message, extractDelta(message));
             }
         }

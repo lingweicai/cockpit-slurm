@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-    Alert,
     Badge,
     Button,
     Card,
@@ -15,19 +14,25 @@ import {
     Tab,
     Tabs,
     TabTitleText,
-    TextInput,
 } from '@patternfly/react-core';
 
 import cockpit from 'cockpit';
 
 import type { AppRole } from '../../app/navigation';
-import { EntityTable, type EntityTableColumn } from '../../components/EntityTable';
+import { ActionFeedbackAlert } from '../../components/ActionFeedbackAlert';
+import { EntityTable, type EntityTableColumn, type EntityTableRowAction } from '../../components/EntityTable';
+import { ResetTableFiltersButton } from '../../components/ResetTableFiltersButton';
+import { SummaryMetricsGallery } from '../../components/SummaryMetricsGallery';
+import { TableEmptyMatchState } from '../../components/TableEmptyMatchState';
+import { TableToolbarActions } from '../../components/TableToolbarActions';
+import { TableToolbarField } from '../../components/TableToolbarField';
 import { useTransientAlert } from '../../hooks/useTransientAlert';
-import { copyTextToClipboard } from '../../lib/clipboard';
+import { buildCopyNameRowAction, buildDetailsRowAction } from '../../lib/rowActions';
 import type { JobRecord, JobState } from '../../types/job';
 import type { SlurmJob } from '../../types/slurm-api';
 import { fetchJobs, subscribeJobsUpdates } from '../../services/jobsChannel';
 import { applySlurmJobsDelta, resolveJobRows } from './jobsData';
+import { type JobsSortKey, matchesJobFilter, useJobsTableState } from './useJobsTableState';
 
 const _ = cockpit.gettext;
 
@@ -35,65 +40,10 @@ type JobsPageProps = {
     role: AppRole;
 };
 
-type SortKey = 'jobId' | 'user' | 'partition' | 'state' | 'runtime';
-type SortDirection = 'asc' | 'desc';
 type DrawerTabKey = 'general' | 'resources' | 'environment' | 'stdout' | 'stderr' | 'history';
-
-const STATE_ORDER: Record<JobState, number> = {
-    RUNNING: 0,
-    PENDING: 1,
-    FAILED: 2,
-    COMPLETED: 3,
-    CANCELLED: 4,
-};
 
 function formatCount(value: number) {
     return value.toLocaleString();
-}
-
-function runtimeToSeconds(runtime: string) {
-    const parts = runtime.split(':').map((part) => Number(part));
-    if (parts.length !== 3 || parts.some((part) => Number.isNaN(part))) {
-        return 0;
-    }
-
-    return parts[0] * 3600 + parts[1] * 60 + parts[2];
-}
-
-function compareJobs(left: JobRecord, right: JobRecord, sortKey: SortKey, direction: SortDirection) {
-    const directionFactor = direction === 'asc' ? 1 : -1;
-
-    if (sortKey === 'runtime') {
-        return (runtimeToSeconds(left.runtime) - runtimeToSeconds(right.runtime)) * directionFactor;
-    }
-
-    if (sortKey === 'state') {
-        return (STATE_ORDER[left.state] - STATE_ORDER[right.state]) * directionFactor;
-    }
-
-    const leftValue = String(left[sortKey]).toLowerCase();
-    const rightValue = String(right[sortKey]).toLowerCase();
-    return leftValue.localeCompare(rightValue) * directionFactor;
-}
-
-function matchesFilter(job: JobRecord, query: string) {
-    if (!query.trim()) {
-        return true;
-    }
-
-    const haystack = [
-        job.jobId,
-        job.name,
-        job.user,
-        job.account,
-        job.partition,
-        job.state,
-        job.command,
-        job.nodeList,
-        job.qos,
-    ].join(' ').toLowerCase();
-
-    return haystack.includes(query.toLowerCase());
 }
 
 function renderStateBadge(state: JobState) {
@@ -194,13 +144,48 @@ function DrawerDetails({ job, tabKey, setTabKey }: { job: JobRecord; tabKey: Dra
     );
 }
 
+function buildJobRowActionItems(
+    job: JobRecord,
+    onSelectJob: (jobId: string) => void,
+    showActionMessage: (alert: { variant: 'success' | 'danger' | 'warning' | 'info'; title: string }) => void,
+): EntityTableRowAction<JobRecord>[] {
+    return [
+        buildDetailsRowAction({
+            onClick: () => onSelectJob(job.jobId),
+        }),
+        buildCopyNameRowAction({
+            id: 'copy-job-id',
+            label: _('Copy Job ID'),
+            value: job.jobId,
+            successTitle: cockpit.format(_('Copied Job ID $0 to clipboard.'), job.jobId),
+            failureTitle: cockpit.format(_('Unable to copy Job ID $0.'), job.jobId),
+            showAlert: showActionMessage,
+        }),
+        buildCopyNameRowAction({
+            id: 'copy-job-command',
+            label: _('Copy Job Command'),
+            value: job.command,
+            successTitle: cockpit.format(_('Copied command for Job $0 to clipboard.'), job.jobId),
+            failureTitle: cockpit.format(_('Unable to copy command for Job $0.'), job.jobId),
+            showAlert: showActionMessage,
+        }),
+    ];
+}
+
 export const JobsPage = ({ role }: JobsPageProps) => {
     const [jobsPayload, setJobsPayload] = useState<{ jobs: SlurmJob[] } | null>(null);
-    const [query, setQuery] = useState('');
-    const [stateFilter, setStateFilter] = useState<'ALL' | JobState>('ALL');
-    const [sortKey, setSortKey] = useState<SortKey>('state');
-    const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
     const jobs = useMemo(() => resolveJobRows(jobsPayload), [jobsPayload]);
+    const {
+        query,
+        setQuery,
+        stateFilter,
+        setStateFilter,
+        sortKey,
+        sortDirection,
+        filteredJobs,
+        handleSortChange,
+        resetFilters,
+    } = useJobsTableState(jobs);
     const [selectedJobId, setSelectedJobId] = useState<string | null>(jobs[0]?.jobId ?? null);
     const [drawerTab, setDrawerTab] = useState<DrawerTabKey>('general');
     const { alert: actionMessage, showAlert: showActionMessage } = useTransientAlert();
@@ -246,35 +231,8 @@ export const JobsPage = ({ role }: JobsPageProps) => {
         }
     }, [jobs, selectedJobId]);
 
-    const filteredJobs = useMemo(() => {
-        return jobs
-                .slice()
-                .filter((job) => (stateFilter === 'ALL' ? true : job.state === stateFilter))
-                .filter((job) => matchesFilter(job, query))
-                .sort((left, right) => compareJobs(left, right, sortKey, sortDirection));
-    }, [jobs, query, sortDirection, sortKey, stateFilter]);
-
     const selectedJob = filteredJobs.find((job) => job.jobId === selectedJobId) ?? filteredJobs[0] ?? null;
     const summary = useMemo(() => buildSummary(filteredJobs), [filteredJobs]);
-
-    const handleCopyAction = async (value: string, successMessage: string, failureMessage: string) => {
-        const copied = await copyTextToClipboard(value);
-
-        showActionMessage({
-            variant: copied ? 'success' : 'danger',
-            title: copied ? successMessage : failureMessage,
-        });
-    };
-
-    const handleSortChange = (nextSortKey: SortKey) => {
-        if (sortKey === nextSortKey) {
-            setSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
-            return;
-        }
-
-        setSortKey(nextSortKey);
-        setSortDirection('asc');
-    };
     const tableColumns: EntityTableColumn<JobRecord>[] = [
         {
             header: _('JobID'),
@@ -283,7 +241,7 @@ export const JobsPage = ({ role }: JobsPageProps) => {
             sortable: {
                 isActive: sortKey === 'jobId',
                 direction: sortDirection,
-                onSort: () => handleSortChange('jobId'),
+                onSort: () => handleSortChange('jobId' as JobsSortKey),
             },
         },
         {
@@ -293,7 +251,7 @@ export const JobsPage = ({ role }: JobsPageProps) => {
             sortable: {
                 isActive: sortKey === 'user',
                 direction: sortDirection,
-                onSort: () => handleSortChange('user'),
+                onSort: () => handleSortChange('user' as JobsSortKey),
             },
         },
         {
@@ -308,7 +266,7 @@ export const JobsPage = ({ role }: JobsPageProps) => {
             sortable: {
                 isActive: sortKey === 'partition',
                 direction: sortDirection,
-                onSort: () => handleSortChange('partition'),
+                onSort: () => handleSortChange('partition' as JobsSortKey),
             },
         },
         {
@@ -318,7 +276,7 @@ export const JobsPage = ({ role }: JobsPageProps) => {
             sortable: {
                 isActive: sortKey === 'state',
                 direction: sortDirection,
-                onSort: () => handleSortChange('state'),
+                onSort: () => handleSortChange('state' as JobsSortKey),
             },
         },
         {
@@ -328,7 +286,7 @@ export const JobsPage = ({ role }: JobsPageProps) => {
             sortable: {
                 isActive: sortKey === 'runtime',
                 direction: sortDirection,
-                onSort: () => handleSortChange('runtime'),
+                onSort: () => handleSortChange('runtime' as JobsSortKey),
             },
         },
         {
@@ -351,60 +309,15 @@ export const JobsPage = ({ role }: JobsPageProps) => {
                 : null}
             >
                 <div style={{ display: 'grid', gap: '1rem' }}>
-                    <Gallery hasGutter>
-                        {summary.map((metric) => (
-                            <GalleryItem key={metric.title}>
-                                <Card>
-                                    <CardTitle>{metric.title}</CardTitle>
-                                    <CardBody>
-                                        <strong>{metric.value}</strong>
-                                    </CardBody>
-                                </Card>
-                            </GalleryItem>
-                        ))}
-                    </Gallery>
+                    <SummaryMetricsGallery metrics={summary} />
 
                     <Card>
                         <CardTitle>{role === 'user' ? _('My jobs') : _('Jobs queue')}</CardTitle>
                         <CardBody>
-                            <div style={{ display: 'grid', gap: '0.75rem', marginBottom: '1rem' }}>
-                                {actionMessage && (
-                                    <Alert isInline variant={actionMessage.variant} title={actionMessage.title} />
-                                )}
-                                <TextInput
-                                    value={query}
-                                    onChange={(_event, value) => setQuery(value)}
-                                    aria-label={_('Search jobs')}
-                                    placeholder={_('Search by job, user, account, partition, or state')}
-                                />
-                                <div style={{ display: 'grid', gap: '0.5rem', gridTemplateColumns: 'repeat(1, minmax(0, 1fr))' }}>
-                                    <label>
-                                        <div>{_('State')}</div>
-                                        <select value={stateFilter} onChange={(event) => setStateFilter(event.target.value as 'ALL' | JobState)}>
-                                            <option value="ALL">{_('All')}</option>
-                                            <option value="RUNNING">{_('Running')}</option>
-                                            <option value="PENDING">{_('Pending')}</option>
-                                            <option value="FAILED">{_('Failed')}</option>
-                                            <option value="COMPLETED">{_('Completed')}</option>
-                                            <option value="CANCELLED">{_('Cancelled')}</option>
-                                        </select>
-                                    </label>
-                                </div>
-                                <Button
-                                    variant="link"
-                                    onClick={() => {
-                                        setQuery('');
-                                        setStateFilter('ALL');
-                                        setSortKey('state');
-                                        setSortDirection('asc');
-                                    }}
-                                >
-                                    {_('Reset filters')}
-                                </Button>
-                            </div>
+                            <ActionFeedbackAlert alert={actionMessage} />
 
                             {filteredJobs.length === 0 && (
-                                <Alert variant="info" title={_('No jobs match the current filters.')} />
+                                <TableEmptyMatchState title={_('No jobs match the current filters.')} />
                             )}
                             {filteredJobs.length > 0 && (
                                 <EntityTable
@@ -415,48 +328,32 @@ export const JobsPage = ({ role }: JobsPageProps) => {
                                     onRowClick={(job) => setSelectedJobId(job.jobId)}
                                     selectedRowKey={selectedJob?.jobId ?? null}
                                     rowActionsVariant="menu"
-                                    rowActionItems={(job) => [
-                                        {
-                                            id: 'details',
-                                            label: _('Details'),
-                                            onClick: () => setSelectedJobId(job.jobId),
-                                        },
-                                        {
-                                            id: 'copy-job-id',
-                                            label: _('Copy Job ID'),
-                                            onClick: () => {
-                                                handleCopyAction(
-                                                    job.jobId,
-                                                    cockpit.format(_('Copied Job ID $0 to clipboard.'), job.jobId),
-                                                    cockpit.format(_('Unable to copy Job ID $0.'), job.jobId),
-                                                ).catch(() => {
-                                                    showActionMessage({
-                                                        variant: 'danger',
-                                                        title: cockpit.format(_('Unable to copy Job ID $0.'), job.jobId),
-                                                    });
-                                                });
-                                            },
-                                        },
-                                        {
-                                            id: 'copy-job-command',
-                                            label: _('Copy Job Command'),
-                                            onClick: () => {
-                                                handleCopyAction(
-                                                    job.command,
-                                                    cockpit.format(_('Copied command for Job $0 to clipboard.'), job.jobId),
-                                                    cockpit.format(_('Unable to copy command for Job $0.'), job.jobId),
-                                                ).catch(() => {
-                                                    showActionMessage({
-                                                        variant: 'danger',
-                                                        title: cockpit.format(_('Unable to copy command for Job $0.'), job.jobId),
-                                                    });
-                                                });
-                                            },
-                                        },
-                                    ]}
+                                    rowActionItems={(job) => buildJobRowActionItems(job, setSelectedJobId, showActionMessage)}
                                     pagination={{
                                         defaultPerPage: 10,
                                         perPageOptions: [10, 20, 50],
+                                    }}
+                                    toolbar={(
+                                        <TableToolbarActions>
+                                            <TableToolbarField label={_('State')}>
+                                                <select value={stateFilter} onChange={(event) => setStateFilter(event.target.value as 'ALL' | JobState)}>
+                                                    <option value="ALL">{_('All')}</option>
+                                                    <option value="RUNNING">{_('Running')}</option>
+                                                    <option value="PENDING">{_('Pending')}</option>
+                                                    <option value="FAILED">{_('Failed')}</option>
+                                                    <option value="COMPLETED">{_('Completed')}</option>
+                                                    <option value="CANCELLED">{_('Cancelled')}</option>
+                                                </select>
+                                            </TableToolbarField>
+                                            <ResetTableFiltersButton onReset={resetFilters} />
+                                        </TableToolbarActions>
+                                    )}
+                                    filter={{
+                                        placeholder: _('Search by job, user, account, partition, or state'),
+                                        query,
+                                        onQueryChange: setQuery,
+                                        matches: matchesJobFilter,
+                                        emptyState: <TableEmptyMatchState title={_('No jobs match the current filters.')} />,
                                     }}
                                 />
                             )}

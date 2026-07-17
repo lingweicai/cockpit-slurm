@@ -201,7 +201,13 @@ export const Application = () => {
         loadSinfo();
 
         const unsubscribe = subscribeSinfoUpdates((payload) => {
-            if (payload?.type !== 'sinfo.updated') {
+            if (!payload || typeof payload !== 'object') {
+                return;
+            }
+
+            const record = payload as Record<string, unknown>;
+            const isSinfoEvent = record.type === 'event' && record.entity === 'sinfo';
+            if (!isSinfoEvent) {
                 return;
             }
 
