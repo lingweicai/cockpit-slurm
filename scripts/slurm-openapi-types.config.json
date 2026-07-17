@@ -1,0 +1,8 @@
+{
+  "input": "cmd/internal/models/slurm-25.05.7-openapi-v0.0.43.json",
+  "output": "src/types/slurm-openapi.gen.ts",
+  "options": [
+    "--enum",
+    "--immutable"
+  ]
+}

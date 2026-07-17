@@ -1,4 +1,13 @@
 import type { JobRecord, JobState } from '../../types/job';
+import type { SlurmJob, SlurmJobsResponse } from '../../types/slurm-api';
+
+type SlurmJobsPayload = Pick<SlurmJobsResponse, 'jobs'>;
+
+export type SlurmJobsDelta = {
+    added?: SlurmJob[];
+    modified?: SlurmJob[];
+    deleted?: SlurmJob[];
+};
 
 function buildHistory(state: JobState, submitTime: string, startTime: string | null, endTime: string | null) {
     const history = [
@@ -14,6 +23,149 @@ function buildHistory(state: JobState, submitTime: string, startTime: string | n
     }
 
     return history;
+}
+
+function normalizeTimestamp(raw: unknown) {
+    if (raw && typeof raw === 'object' && 'number' in raw) {
+        const unix = Number((raw as { number?: unknown }).number);
+        if (Number.isFinite(unix) && unix > 0) {
+            return new Date(unix * 1000).toISOString();
+        }
+    }
+
+    return null;
+}
+
+function normalizeInteger(raw: unknown) {
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+        return raw;
+    }
+
+    if (raw && typeof raw === 'object' && 'number' in raw) {
+        const value = Number((raw as { number?: unknown }).number);
+        if (Number.isFinite(value)) {
+            return value;
+        }
+    }
+
+    return 0;
+}
+
+function mapState(state: SlurmJob['job_state']): JobState {
+    const primaryState = Array.isArray(state) ? state[0] : undefined;
+
+    switch (primaryState) {
+    case 'RUNNING':
+    case 'PENDING':
+    case 'FAILED':
+    case 'COMPLETED':
+    case 'CANCELLED':
+        return primaryState;
+    default:
+        return 'PENDING';
+    }
+}
+
+function formatRuntime(startTime: string | null, endTime: string | null) {
+    if (!startTime) {
+        return '00:00:00';
+    }
+
+    const startMs = Date.parse(startTime);
+    const endMs = endTime ? Date.parse(endTime) : Date.now();
+    if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) {
+        return '00:00:00';
+    }
+
+    const totalSeconds = Math.floor((endMs - startMs) / 1000);
+    const hours = Math.floor(totalSeconds / 3600)
+            .toString()
+            .padStart(2, '0');
+    const minutes = Math.floor((totalSeconds % 3600) / 60)
+            .toString()
+            .padStart(2, '0');
+    const seconds = (totalSeconds % 60).toString().padStart(2, '0');
+    return `${hours}:${minutes}:${seconds}`;
+}
+
+export function mapSlurmJobToRecord(job: SlurmJob): JobRecord {
+    const state = mapState(job.job_state);
+    const submitTime = normalizeTimestamp(job.submit_time) ?? new Date(0).toISOString();
+    const startTime = normalizeTimestamp(job.start_time);
+    const endTime = normalizeTimestamp(job.end_time);
+    const jobId = String(job.job_id ?? 'unknown');
+
+    return {
+        jobId,
+        name: job.name ?? `job-${jobId}`,
+        user: job.user_name ?? String(job.user_id ?? 'unknown'),
+        account: job.account ?? 'unknown',
+        partition: job.partition ?? 'unknown',
+        state,
+        runtime: formatRuntime(startTime, endTime),
+        nodes: normalizeInteger(job.node_count),
+        cpus: normalizeInteger(job.cpus),
+        submitTime,
+        startTime,
+        endTime,
+        nodeList: job.nodes ?? '',
+        qos: job.qos ?? '',
+        command: job.command ?? '',
+        workDir: job.current_working_directory ?? '',
+        stdout: job.standard_output ?? '',
+        stderr: job.standard_error ?? '',
+        environment: {},
+        history: buildHistory(state, submitTime, startTime, endTime),
+    };
+}
+
+export function mapSlurmJobsResponseToRecords(response: SlurmJobsPayload): JobRecord[] {
+    return response.jobs.map((job) => mapSlurmJobToRecord(job));
+}
+
+export function resolveJobRows(response?: SlurmJobsPayload | null): JobRecord[] {
+    if (!response || !Array.isArray(response.jobs) || response.jobs.length === 0) {
+        return JOB_FIXTURES;
+    }
+
+    return mapSlurmJobsResponseToRecords(response);
+}
+
+function jobIdentity(job: SlurmJob) {
+    return String(job.job_id ?? 'unknown');
+}
+
+export function applySlurmJobsDelta(
+    current: SlurmJobsPayload | null,
+    delta: SlurmJobsDelta,
+): SlurmJobsPayload | null {
+    const added = Array.isArray(delta.added) ? delta.added : [];
+    const modified = Array.isArray(delta.modified) ? delta.modified : [];
+    const deleted = Array.isArray(delta.deleted) ? delta.deleted : [];
+
+    if (!current || !Array.isArray(current.jobs) || current.jobs.length === 0) {
+        if (added.length > 0 || modified.length > 0) {
+            return { jobs: [...added, ...modified] };
+        }
+
+        return current;
+    }
+
+    const nextById = new Map(current.jobs.map((job) => [jobIdentity(job), job]));
+
+    for (const job of added) {
+        nextById.set(jobIdentity(job), job);
+    }
+
+    for (const job of modified) {
+        nextById.set(jobIdentity(job), job);
+    }
+
+    for (const job of deleted) {
+        nextById.delete(jobIdentity(job));
+    }
+
+    return { jobs: Array.from(nextById.values()) };
 }
 
 export const JOB_FIXTURES: JobRecord[] = [

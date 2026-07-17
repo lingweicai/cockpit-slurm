@@ -13,6 +13,12 @@ import (
 	"github.com/lingweicai/cockpit-slurm/cmd/internal/models"
 )
 
+func strPtr(v string) *string { return &v }
+
+func int32Ptr(v int32) *int32 { return &v }
+
+func int64Ptr(v int64) *int64 { return &v }
+
 type socketStubProvider struct {
 	accounts []*models.Account
 }
@@ -98,4 +104,50 @@ func readResponseLine(t *testing.T, reader *bufio.Reader) response {
 		t.Fatalf("Unmarshal() error = %v, payload=%q", err, line)
 	}
 	return resp
+}
+
+func TestJobIdentityPrefersJobID(t *testing.T) {
+	job := models.V0043JobInfo{JobId: int32Ptr(42)}
+	if got := jobIdentity(job); got != "job:42" {
+		t.Fatalf("jobIdentity() = %q, want %q", got, "job:42")
+	}
+}
+
+func TestJobIdentityFallbackUsesStableFields(t *testing.T) {
+	job := models.V0043JobInfo{
+		Name:     strPtr("alpha"),
+		UserName: strPtr("alice"),
+		SubmitTime: &models.V0043Uint64NoValStruct{
+			Number: int64Ptr(1719700000),
+		},
+	}
+
+	if got := jobIdentity(job); got != "job:fallback:alpha:alice:1719700000" {
+		t.Fatalf("jobIdentity() = %q, want %q", got, "job:fallback:alpha:alice:1719700000")
+	}
+}
+
+func TestDiffJobsDetectsAddedModifiedDeleted(t *testing.T) {
+	prev := map[string]models.V0043JobInfo{
+		"job:1": {JobId: int32Ptr(1), Name: strPtr("old")},
+		"job:2": {JobId: int32Ptr(2), Name: strPtr("gone")},
+	}
+	next := map[string]models.V0043JobInfo{
+		"job:1": {JobId: int32Ptr(1), Name: strPtr("new")},
+		"job:3": {JobId: int32Ptr(3), Name: strPtr("added")},
+	}
+
+	delta := diffJobs(prev, next)
+
+	if len(delta.Added) != 1 || delta.Added[0].JobId == nil || *delta.Added[0].JobId != 3 {
+		t.Fatalf("delta.Added = %#v, want job id 3", delta.Added)
+	}
+
+	if len(delta.Modified) != 1 || delta.Modified[0].JobId == nil || *delta.Modified[0].JobId != 1 {
+		t.Fatalf("delta.Modified = %#v, want job id 1", delta.Modified)
+	}
+
+	if len(delta.Deleted) != 1 || delta.Deleted[0].JobId == nil || *delta.Deleted[0].JobId != 2 {
+		t.Fatalf("delta.Deleted = %#v, want job id 2", delta.Deleted)
+	}
 }

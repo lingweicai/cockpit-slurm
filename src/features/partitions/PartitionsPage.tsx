@@ -1,20 +1,32 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
+    Button,
     Card,
     CardBody,
     CardTitle,
     Gallery,
     GalleryItem,
 } from '@patternfly/react-core';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import cockpit from 'cockpit';
 
+import { ActionFeedbackAlert } from '../../components/ActionFeedbackAlert';
 import { EmptyState } from '../../components/EmptyState';
+import { EntityTable, type EntityTableColumn, type EntityTableRowAction } from '../../components/EntityTable';
 import { ErrorState } from '../../components/ErrorState';
+import { ResetTableFiltersButton } from '../../components/ResetTableFiltersButton';
+import { SummaryMetricsGallery } from '../../components/SummaryMetricsGallery';
+import { TableEmptyMatchState } from '../../components/TableEmptyMatchState';
+import { TableToolbarActions } from '../../components/TableToolbarActions';
+import { useTransientAlert } from '../../hooks/useTransientAlert';
+import { buildCopyNameRowAction, buildToggleDetailsRowAction } from '../../lib/rowActions';
 import { LoadingState } from '../../components/LoadingState';
+import { fetchPartitions, subscribePartitionUpdates } from '../../services/partitionsChannel';
 import type { SinfoPartitionRow } from '../../types/sinfo';
-import { buildPartitionSummaries } from '../cluster/clusterData';
+import type { SlurmPartition } from '../../types/slurm-api';
+import { buildPartitionSummaries, type PartitionSummary } from '../cluster/clusterData';
+import { applySlurmPartitionsDelta, resolvePartitionSummaries, type SlurmPartitionsPayload } from './partitionsData';
+import { type PartitionSortKey, matchesPartitionFilter, usePartitionsTableState } from './usePartitionsTableState';
 
 const _ = cockpit.gettext;
 
@@ -26,6 +38,28 @@ type PartitionsPageProps = {
     error: string | null;
 };
 
+function buildPartitionRowActionItems(
+    summary: PartitionSummary,
+    onSelectPartition: (partitionName: string) => void,
+    onToggleExpanded: (partitionName: string) => void,
+    showActionMessage: (alert: { variant: 'success' | 'danger' | 'warning' | 'info'; title: string }) => void,
+): EntityTableRowAction<PartitionSummary>[] {
+    return [
+        buildToggleDetailsRowAction({
+            onSelect: () => onSelectPartition(summary.partitionName),
+            onToggle: () => onToggleExpanded(summary.partitionName),
+        }),
+        buildCopyNameRowAction({
+            id: 'copy-partition-name',
+            label: _('Copy Partition Name'),
+            value: summary.partitionName,
+            successTitle: cockpit.format(_('Copied partition name $0 to clipboard.'), summary.partitionName),
+            failureTitle: cockpit.format(_('Unable to copy partition name $0.'), summary.partitionName),
+            showAlert: showActionMessage,
+        }),
+    ];
+}
+
 function formatCount(value: number) {
     return value.toLocaleString();
 }
@@ -36,8 +70,62 @@ function isDegradedPartition(row: SinfoPartitionRow) {
 }
 
 export const PartitionsPage = ({ loading, rows, updatedAt, waitMessage, error }: PartitionsPageProps) => {
+    const [partitionsPayload, setPartitionsPayload] = useState<SlurmPartitionsPayload | null>(null);
     const [expandedPartition, setExpandedPartition] = useState<string | null>(null);
-    const summaries = useMemo(() => buildPartitionSummaries(rows), [rows]);
+    const [selectedPartition, setSelectedPartition] = useState<string | null>(null);
+    const { alert: actionMessage, showAlert: showActionMessage } = useTransientAlert();
+    const summaries = useMemo(() => {
+        const liveSummaries = resolvePartitionSummaries(partitionsPayload);
+        if (liveSummaries.length > 0) {
+            return liveSummaries;
+        }
+
+        return buildPartitionSummaries(rows);
+    }, [partitionsPayload, rows]);
+    const {
+        query,
+        setQuery,
+        sortKey,
+        sortDirection,
+        sortedSummaries,
+        handleSortChange,
+        resetFilters,
+    } = usePartitionsTableState(summaries);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const loadPartitions = async () => {
+            try {
+                const payload = await fetchPartitions();
+                if (!isMounted) {
+                    return;
+                }
+
+                setPartitionsPayload(payload);
+            } catch {
+                // Keep sinfo-derived fallback if live partition fetch fails.
+            }
+        };
+
+        loadPartitions();
+
+        const unsubscribe = subscribePartitionUpdates((_event, delta) => {
+            if (delta) {
+                setPartitionsPayload((current) => applySlurmPartitionsDelta(current, delta));
+                return;
+            }
+
+            loadPartitions().catch(() => {
+                // Keep current partition view if refresh fails.
+            });
+        });
+
+        return () => {
+            isMounted = false;
+            unsubscribe();
+        };
+    }, []);
 
     const metrics = useMemo(() => {
         const degraded = rows.filter(isDegradedPartition).length;
@@ -49,6 +137,60 @@ export const PartitionsPage = ({ loading, rows, updatedAt, waitMessage, error }:
         ];
     }, [rows]);
 
+    useEffect(() => {
+        if (!selectedPartition || !sortedSummaries.some((summary) => summary.partitionName === selectedPartition)) {
+            setSelectedPartition(sortedSummaries[0]?.partitionName ?? null);
+        }
+    }, [selectedPartition, sortedSummaries]);
+
+    const tableColumns: EntityTableColumn<PartitionSummary>[] = [
+        {
+            header: _('Partition'),
+            dataLabel: _('Partition'),
+            cell: (summary) => summary.partitionName,
+            sortable: {
+                isActive: sortKey === 'partitionName',
+                direction: sortDirection,
+                onSort: () => handleSortChange('partitionName' as PartitionSortKey),
+            },
+        },
+        {
+            header: _('State'),
+            dataLabel: _('State'),
+            cell: (summary) => summary.state,
+            sortable: {
+                isActive: sortKey === 'state',
+                direction: sortDirection,
+                onSort: () => handleSortChange('state' as PartitionSortKey),
+            },
+        },
+        {
+            header: _('Nodes'),
+            dataLabel: _('Nodes'),
+            cell: (summary) => summary.nodes,
+            sortable: {
+                isActive: sortKey === 'nodes',
+                direction: sortDirection,
+                onSort: () => handleSortChange('nodes' as PartitionSortKey),
+            },
+        },
+        {
+            header: _('CPUs'),
+            dataLabel: _('CPUs'),
+            cell: (summary) => summary.cpus,
+            sortable: {
+                isActive: sortKey === 'cpus',
+                direction: sortDirection,
+                onSort: () => handleSortChange('cpus' as PartitionSortKey),
+            },
+        },
+        {
+            header: _('Availability'),
+            dataLabel: _('Availability'),
+            cell: (summary) => summary.availability,
+        },
+    ];
+
     if (error) {
         return <ErrorState title={_('Unable to load partitions')} message={error} />;
     }
@@ -59,77 +201,55 @@ export const PartitionsPage = ({ loading, rows, updatedAt, waitMessage, error }:
 
     return (
         <div style={{ display: 'grid', gap: '1rem' }}>
-            <Gallery hasGutter>
-                {metrics.map((metric) => (
-                    <GalleryItem key={metric.title}>
-                        <Card>
-                            <CardTitle>{metric.title}</CardTitle>
-                            <CardBody>
-                                <strong>{metric.value}</strong>
-                                <div>{metric.description}</div>
-                            </CardBody>
-                        </Card>
-                    </GalleryItem>
-                ))}
-            </Gallery>
+            <SummaryMetricsGallery metrics={metrics} />
 
             <Card>
                 <CardTitle>{_('Partition summary')}</CardTitle>
                 <CardBody>
-                    {rows.length === 0 && (
+                    <ActionFeedbackAlert alert={actionMessage} />
+                    {summaries.length === 0 && (
                         <EmptyState title={_('No partition rows are available.')} message={_('The bridge cache has not produced partition data yet.')} />
                     )}
-                    {rows.length > 0 && (
-                        <Table aria-label={_('Partition summary table')} variant="compact">
-                            <Thead>
-                                <Tr>
-                                    <Th screenReaderText={_('Expand row')} />
-                                    <Th>{_('Partition')}</Th>
-                                    <Th>{_('State')}</Th>
-                                    <Th>{_('Nodes')}</Th>
-                                    <Th>{_('CPUs')}</Th>
-                                    <Th>{_('Availability')}</Th>
-                                </Tr>
-                            </Thead>
-                            {summaries.map((summary, rowIndex) => {
-                                const row = rows.find((item) => item.partitionName === summary.partitionName);
-                                const isExpanded = expandedPartition === summary.partitionName;
-
-                                return (
-                                    <Tbody key={summary.partitionName} isExpanded={isExpanded}>
-                                        <Tr>
-                                            <Td
-                                                expand={{
-                                                    isExpanded,
-                                                    rowIndex,
-                                                    onToggle: () => setExpandedPartition(isExpanded ? null : summary.partitionName),
-                                                }}
-                                            />
-                                            <Td dataLabel={_('Partition')}>{summary.partitionName}</Td>
-                                            <Td dataLabel={_('State')}>{summary.state}</Td>
-                                            <Td dataLabel={_('Nodes')}>{summary.nodes}</Td>
-                                            <Td dataLabel={_('CPUs')}>{summary.cpus}</Td>
-                                            <Td dataLabel={_('Availability')}>{summary.availability}</Td>
-                                        </Tr>
-                                        {isExpanded && row && (
-                                            <Tr isExpanded>
-                                                <Td colSpan={6}>
-                                                    <div style={{ display: 'grid', gap: '0.5rem' }}>
-                                                        <div><strong>{_('Features')}:</strong> {summary.features}</div>
-                                                        <div><strong>{_('Limits')}:</strong> {summary.limits}</div>
-                                                        <div><strong>{_('Reservation')}:</strong> {summary.reservation}</div>
-                                                        <div><strong>{_('Comment')}:</strong> {summary.comment}</div>
-                                                        <div><strong>{_('Partition TRES')}:</strong> {row.partitionTRES || _('N/A')}</div>
-                                                    </div>
-                                                </Td>
-                                            </Tr>
-                                        )}
-                                    </Tbody>
-                                );
-                            })}
-                        </Table>
+                    {summaries.length > 0 && (
+                        <EntityTable
+                            ariaLabel={_('Partition summary table')}
+                            columns={tableColumns}
+                            rows={sortedSummaries}
+                            rowKey={(summary) => summary.partitionName}
+                            onRowClick={(summary) => setSelectedPartition(summary.partitionName)}
+                            selectedRowKey={selectedPartition}
+                            rowActionsVariant="menu"
+                            rowActionItems={(summary) => buildPartitionRowActionItems(summary, setSelectedPartition, (partitionName) => setExpandedPartition((current) => (current === partitionName ? null : partitionName)), showActionMessage)}
+                            expandable={{
+                                expandedRowKey: expandedPartition,
+                                onToggle: (_summary, rowKey) => {
+                                    setExpandedPartition((current) => (current === rowKey ? null : rowKey));
+                                },
+                                renderExpandedContent: (summary) => (
+                                    <div style={{ display: 'grid', gap: '0.5rem' }}>
+                                        <div><strong>{_('Features')}:</strong> {summary.features}</div>
+                                        <div><strong>{_('Limits')}:</strong> {summary.limits}</div>
+                                        <div><strong>{_('Reservation')}:</strong> {summary.reservation}</div>
+                                        <div><strong>{_('Comment')}:</strong> {summary.comment}</div>
+                                        <div><strong>{_('Partition TRES')}:</strong> {summary.partitionTRES || _('N/A')}</div>
+                                    </div>
+                                ),
+                            }}
+                            toolbar={(
+                                <TableToolbarActions>
+                                    <ResetTableFiltersButton onReset={resetFilters} />
+                                </TableToolbarActions>
+                            )}
+                            filter={{
+                                placeholder: _('Filter partitions by name, state, limits, reservation, or TRES'),
+                                query,
+                                onQueryChange: setQuery,
+                                matches: matchesPartitionFilter,
+                                emptyState: <TableEmptyMatchState title={_('No matching partitions')} message={_('Adjust the filter to find partitions.')} />,
+                            }}
+                        />
                     )}
-                    {!loading && rows.length > 0 && (
+                    {!loading && summaries.length > 0 && (
                         <p>{cockpit.format(_('Last update: $0'), updatedAt ? new Date(updatedAt).toLocaleString() : _('Unknown'))}</p>
                     )}
                 </CardBody>

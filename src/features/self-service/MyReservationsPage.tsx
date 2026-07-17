@@ -1,11 +1,12 @@
 import React, { useMemo } from 'react';
-import { Alert, Badge, Card, CardBody, CardTitle, Gallery, GalleryItem } from '@patternfly/react-core';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import { Alert, Badge, Card, CardBody, CardTitle } from '@patternfly/react-core';
 
 import cockpit from 'cockpit';
 
+import { EntityTable, type EntityTableColumn } from '../../components/EntityTable';
+import { SummaryMetricsGallery } from '../../components/SummaryMetricsGallery';
 import { getCurrentUserName } from '../../lib/cockpit/session';
-import { RESERVATIONS_FIXTURES } from './selfServiceData';
+import { RESERVATIONS_FIXTURES, type ReservationRecord } from './selfServiceData';
 
 const _ = cockpit.gettext;
 
@@ -29,48 +30,59 @@ export const MyReservationsPage = () => {
     const reservations = useMemo(() => RESERVATIONS_FIXTURES.filter((reservation) => reservation.users.includes(currentUser)), [currentUser]);
     const active = reservations.filter((reservation) => reservation.state === 'ACTIVE').length;
     const upcoming = reservations.filter((reservation) => reservation.state === 'UPCOMING').length;
+    const summaryMetrics = [
+        { title: _('Reservations'), value: formatCount(reservations.length) },
+        { title: _('Active'), value: formatCount(active) },
+        { title: _('Upcoming'), value: formatCount(upcoming) },
+    ];
+
+    const columns: EntityTableColumn<ReservationRecord>[] = [
+        {
+            header: _('Name'),
+            dataLabel: _('Name'),
+            cell: (reservation) => (
+                <>
+                    {reservation.name}{' '}
+                    <Badge isRead variant={badgeVariant(reservation.state)}>{reservation.state}</Badge>
+                </>
+            ),
+        },
+        {
+            header: _('State'),
+            dataLabel: _('State'),
+            cell: (reservation) => reservation.state,
+        },
+        {
+            header: _('Time'),
+            dataLabel: _('Time'),
+            cell: (reservation) => `${reservation.startTime} → ${reservation.endTime}`,
+        },
+        {
+            header: _('Nodes'),
+            dataLabel: _('Nodes'),
+            cell: (reservation) => reservation.nodes,
+        },
+        {
+            header: _('Purpose'),
+            dataLabel: _('Purpose'),
+            cell: (reservation) => reservation.purpose,
+        },
+    ];
 
     return (
         <div style={{ display: 'grid', gap: '1rem' }}>
-            <Gallery hasGutter>
-                <GalleryItem><Card><CardTitle>{_('Reservations')}</CardTitle><CardBody><strong>{formatCount(reservations.length)}</strong></CardBody></Card></GalleryItem>
-                <GalleryItem><Card><CardTitle>{_('Active')}</CardTitle><CardBody><strong>{formatCount(active)}</strong></CardBody></Card></GalleryItem>
-                <GalleryItem><Card><CardTitle>{_('Upcoming')}</CardTitle><CardBody><strong>{formatCount(upcoming)}</strong></CardBody></Card></GalleryItem>
-            </Gallery>
+            <SummaryMetricsGallery metrics={summaryMetrics} />
 
             <Card>
                 <CardTitle>{cockpit.format(_('My reservations for $0'), currentUser)}</CardTitle>
                 <CardBody>
-                    {reservations.length === 0 && (
-                        <Alert variant="info" title={_('No reservations are associated with the current user.')} />
-                    )}
-                    {reservations.length > 0 && (
-                        <Table aria-label={_('My reservations table')} variant="compact">
-                            <Thead>
-                                <Tr>
-                                    <Th>{_('Name')}</Th>
-                                    <Th>{_('State')}</Th>
-                                    <Th>{_('Time')}</Th>
-                                    <Th>{_('Nodes')}</Th>
-                                    <Th>{_('Purpose')}</Th>
-                                </Tr>
-                            </Thead>
-                            <Tbody>
-                                {reservations.map((reservation) => (
-                                    <Tr key={reservation.name}>
-                                        <Td dataLabel={_('Name')}>
-                                            {reservation.name}{' '}
-                                            <Badge isRead variant={badgeVariant(reservation.state)}>{reservation.state}</Badge>
-                                        </Td>
-                                        <Td dataLabel={_('State')}>{reservation.state}</Td>
-                                        <Td dataLabel={_('Time')}>{reservation.startTime} → {reservation.endTime}</Td>
-                                        <Td dataLabel={_('Nodes')}>{reservation.nodes}</Td>
-                                        <Td dataLabel={_('Purpose')}>{reservation.purpose}</Td>
-                                    </Tr>
-                                ))}
-                            </Tbody>
-                        </Table>
-                    )}
+                    <EntityTable
+                        ariaLabel={_('My reservations table')}
+                        columns={columns}
+                        rows={reservations}
+                        rowKey={(reservation) => reservation.name}
+                        emptyState={<Alert variant="info" title={_('No reservations are associated with the current user.')} />}
+                    />
                 </CardBody>
             </Card>
         </div>

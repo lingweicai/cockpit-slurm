@@ -12,6 +12,10 @@
   "scripts": {
     "watch": "ESBUILD_WATCH='true' ./build.js",
     "build": "./build.js",
+    "generate:types": "npm run generate:types:slurm",
+    "generate:types:slurm": "node ./scripts/generate-slurm-openapi-types.mjs",
+    "test:unit:frontend": "tsx --test src/**/*.test.ts",
+    "test:unit": "npm run test:unit:frontend",
     "eslint": "eslint src/",
     "eslint:fix": "eslint --fix src/",
     "stylelint": "stylelint src/*.{css,scss}",
@@ -31,12 +35,14 @@
     "eslint-plugin-promise": "6.6.0",
     "eslint-plugin-react": "7.37.5",
     "eslint-plugin-react-hooks": "4.6.2",
+    "openapi-typescript": "7.10.1",
     "qunit": "2.25.0",
     "stylelint": "17.11.0",
     "stylelint-config-recommended-scss": "17.0.1",
     "stylelint-config-standard": "40.0.0",
     "stylelint-config-standard-scss": "17.0.0",
     "stylelint-formatter-pretty": "4.0.1",
+    "tsx": "4.20.3",
     "typescript": "5.9.3"
   },
   "dependencies": {

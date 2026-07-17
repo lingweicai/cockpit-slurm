@@ -11,6 +11,7 @@ export type PartitionSummary = {
     limits: string;
     comment: string;
     reservation: string;
+    partitionTRES: string;
 };
 
 export type NodeSummary = {
@@ -101,6 +102,7 @@ export function buildPartitionSummaries(rows: SinfoPartitionRow[]): PartitionSum
         limits: row.timeLimit || 'N/A',
         comment: row.comment || 'None',
         reservation: row.reservation || 'N/A',
+        partitionTRES: row.partitionTRES || 'N/A',
     }));
 }
 

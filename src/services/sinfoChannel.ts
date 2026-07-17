@@ -2,14 +2,7 @@ import cockpit from 'cockpit';
 
 import type { BridgeEnvelope } from '../types/bridge';
 import type { SinfoPartitionRow } from '../types/sinfo';
-
-import {
-    addChannelListener,
-    openBridgeChannel,
-    removeChannelListener,
-    sendJsonLine,
-} from '../lib/cockpit';
-import { parseBridgeMessages } from '../lib/cockpit/parser';
+import { fetchEntitySnapshot, subscribeEntityUpdates } from './entityChannel';
 
 const _ = cockpit.gettext;
 
@@ -45,131 +38,38 @@ function extractSinfoPayload(message: BridgeEnvelope): SinfoCachePayload | null 
     if (message && typeof message === 'object') {
         const record = message as Record<string, unknown>;
 
-        if (record.type === 'sinfo.response' || record.type === 'sinfo.snapshot' || record.type === 'snapshot') {
-            return normalizeSinfoPayload(record.data ?? record.payload ?? record);
+        if (record.type === 'snapshot' && record.entity === 'sinfo') {
+            return normalizeSinfoPayload(record.payload ?? record.data ?? record);
         }
 
         if (record.type === 'event' && record.entity === 'sinfo') {
-            return normalizeSinfoPayload(record.payload ?? record);
+            return normalizeSinfoPayload(record.payload ?? record.data ?? record);
         }
     }
 
     return normalizeSinfoPayload(message);
 }
 
-function waitForChannelReady(channel: ReturnType<typeof openBridgeChannel>, onReady: () => void) {
-    const readyListener = () => {
-        removeChannelListener(channel, 'ready', readyListener);
-        onReady();
-    };
-
-    addChannelListener(channel, 'ready', readyListener);
-
-    if (channel.ready) {
-        removeChannelListener(channel, 'ready', readyListener);
-        onReady();
-    }
-
-    return () => removeChannelListener(channel, 'ready', readyListener);
-}
-
 export async function fetchSinfo(): Promise<SinfoCachePayload> {
-    const channel = openBridgeChannel();
-
-    return new Promise((resolve, reject) => {
-        let settled = false;
-        let readyCleanup = () => {};
-
-        const cleanup = () => {
-            readyCleanup();
-            removeChannelListener(channel, 'message', onMessage);
-            removeChannelListener(channel, 'close', onClose);
-            channel.close();
-        };
-
-        const finish = (payload: SinfoCachePayload) => {
-            if (settled) {
-                return;
-            }
-
-            settled = true;
-            cleanup();
-            resolve(payload);
-        };
-
-        const fail = (message: string) => {
-            if (settled) {
-                return;
-            }
-
-            settled = true;
-            cleanup();
-            reject(new Error(message));
-        };
-
-        const onMessage = (data: unknown) => {
-            const messages = parseBridgeMessages(data);
-            for (const message of messages) {
-                const payload = extractSinfoPayload(message);
-                if (payload) {
-                    finish(payload);
-                    return;
-                }
-            }
-        };
-
-        const onClose = (event: unknown) => {
-            if (settled) {
-                return;
-            }
-
-            if (event instanceof Error) {
-                fail(event.message);
-                return;
-            }
-
-            if (event && typeof event === 'object' && 'message' in event && typeof (event as { message?: unknown }).message === 'string') {
-                fail((event as { message: string }).message);
-                return;
-            }
-
-            fail(_('Sinfo channel closed before a response was received.'));
-        };
-
-        addChannelListener(channel, 'message', onMessage);
-        addChannelListener(channel, 'close', onClose);
-
-        readyCleanup = waitForChannelReady(channel, () => {
-            sendJsonLine(channel, { action: 'get_sinfo' });
-        });
+    return fetchEntitySnapshot({
+        entity: 'sinfo',
+        extractPayload: extractSinfoPayload,
+        closedMessage: _('Sinfo channel closed before a response was received.'),
     });
 }
 
 export function subscribeSinfoUpdates(callback: (event: BridgeEnvelope) => void) {
-    const channel = openBridgeChannel();
-
-    const onMessage = (data: unknown) => {
-        const messages = parseBridgeMessages(data);
-        for (const message of messages) {
-            if (message && typeof message === 'object') {
-                const record = message as Record<string, unknown>;
-                if (record.type === 'sinfo.updated' || record.type === 'sinfo.event' || record.entity === 'sinfo') {
-                    callback(message);
-                }
+    return subscribeEntityUpdates({
+        entity: 'sinfo',
+        extractDelta: () => null,
+        callback: (event) => callback(event),
+        shouldHandleMessage: (message) => {
+            if (!message || typeof message !== 'object') {
+                return false;
             }
-        }
-    };
 
-    const startSubscription = () => {
-        sendJsonLine(channel, { action: 'subscribe' });
-    };
-
-    const readyCleanup = waitForChannelReady(channel, startSubscription);
-    addChannelListener(channel, 'message', onMessage);
-
-    return () => {
-        readyCleanup();
-        removeChannelListener(channel, 'message', onMessage);
-        channel.close();
-    };
+            const record = message as Record<string, unknown>;
+            return record.type === 'event' && record.entity === 'sinfo';
+        },
+    });
 }
