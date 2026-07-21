@@ -65,10 +65,10 @@ export function getDefaultPageId(role: AppRole): AppPageId {
     }
 
     if (role === 'operator') {
-        return 'dashboard';
+        return 'cluster-overview';
     }
 
-    return 'dashboard';
+    return 'my-jobs';
 }
 
 export function normalizePageId(value: string | null | undefined, role: AppRole): AppPageId {

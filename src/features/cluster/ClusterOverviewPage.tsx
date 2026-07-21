@@ -18,6 +18,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
 import { LoadingState } from '../../components/LoadingState';
 import type { SinfoPartitionRow } from '../../types/sinfo';
+import { buildNodeSummaries, groupNodesByPrefix, type NodeSummary } from './clusterData';
 
 const _ = cockpit.gettext;
 
@@ -27,6 +28,7 @@ type ClusterOverviewPageProps = {
     updatedAt: string | null;
     waitMessage: string | null;
     error: string | null;
+    onSelectNode: (nodeName: string) => void;
 };
 
 type ClusterProfile = {
@@ -58,7 +60,33 @@ function isDegradedPartition(row: SinfoPartitionRow) {
     return states.some((state) => state.includes('down') || state.includes('drain') || state.includes('error'));
 }
 
-export const ClusterOverviewPage = ({ loading, rows, updatedAt, waitMessage, error }: ClusterOverviewPageProps) => {
+function badgeVariantForNodeState(state: string) {
+    const normalizedState = state.toLowerCase();
+
+    if (normalizedState.includes('down') || normalizedState.includes('error') || normalizedState.includes('fail')) {
+        return 'danger';
+    }
+
+    if (normalizedState.includes('drain') || normalizedState.includes('maint') || normalizedState.includes('mixed')) {
+        return 'warning';
+    }
+
+    return 'success';
+}
+
+function buildTopologyGroups(rows: SinfoPartitionRow[]) {
+    return groupNodesByPrefix(buildNodeSummaries(rows));
+}
+
+function renderNodeChip(node: NodeSummary) {
+    return (
+        <Badge key={node.name} isRead variant={badgeVariantForNodeState(node.nodeState)}>
+            {node.nodeState}
+        </Badge>
+    );
+}
+
+export const ClusterOverviewPage = ({ loading, rows, updatedAt, waitMessage, error, onSelectNode }: ClusterOverviewPageProps) => {
     const [clusterName, setClusterName] = useState(CLUSTER_PROFILES[0].name);
     const selectedCluster = CLUSTER_PROFILES.find((profile) => profile.name === clusterName) ?? CLUSTER_PROFILES[0];
 
@@ -77,6 +105,8 @@ export const ClusterOverviewPage = ({ loading, rows, updatedAt, waitMessage, err
             { title: _('Snapshot'), value: rows.length > 0 ? _('Ready') : _('Empty'), description: updatedAt ? new Date(updatedAt).toLocaleString() : _('Waiting for data') },
         ];
     }, [rows, updatedAt]);
+
+    const topologyGroups = useMemo(() => buildTopologyGroups(rows), [rows]);
 
     if (error) {
         return <ErrorState title={_('Unable to load cluster overview')} message={error} />;
@@ -156,6 +186,51 @@ export const ClusterOverviewPage = ({ loading, rows, updatedAt, waitMessage, err
                             ))}
                         </Tbody>
                     </Table>
+                </CardBody>
+            </Card>
+
+            <Card>
+                <CardTitle>{_('Cluster topology')}</CardTitle>
+                <CardBody>
+                    <div style={{ display: 'grid', gap: '1rem' }}>
+                        <div>{_('Nodes are grouped by name prefix so operators can scan racks or host families quickly.')}</div>
+                        <div style={{ display: 'grid', gap: '0.75rem' }}>
+                            {topologyGroups.map((group) => (
+                                <Card key={group.name} isPlain>
+                                    <CardBody>
+                                        <div style={{ display: 'grid', gap: '0.5rem' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                                                <strong>{group.name}</strong>
+                                                <span>{cockpit.format(_('$0 node(s)'), String(group.nodes.length))}</span>
+                                            </div>
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                                {group.nodes.map((node) => (
+                                                    <button
+                                                        key={node.name}
+                                                        type="button"
+                                                        onClick={() => onSelectNode(node.name)}
+                                                        style={{
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.5rem',
+                                                            border: 'none',
+                                                            background: 'transparent',
+                                                            padding: 0,
+                                                            cursor: 'pointer',
+                                                        }}
+                                                        aria-label={cockpit.format(_('Open node $0'), node.name)}
+                                                    >
+                                                        <span style={{ textDecoration: 'underline' }}>{node.name}</span>
+                                                        {renderNodeChip(node)}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </CardBody>
+                                </Card>
+                            ))}
+                        </div>
+                    </div>
                 </CardBody>
             </Card>
         </div>

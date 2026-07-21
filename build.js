@@ -92,7 +92,7 @@ const context = await esbuild.context({
     bundle: true,
     entryPoints: ['./src/index.tsx'],
     // Allow external font files which live in ../../static/fonts
-    external: ['cockpit', 'cockpit-dark-theme', 'patternfly/patternfly-6-cockpit.scss', '*.woff', '*.woff2', '*.jpg', '*.svg', '../../assets*'],
+    external: ['cockpit', 'cockpit-dark-theme', '*.woff', '*.woff2', '*.jpg', '*.svg', '../../assets*'],
     // Move all legal comments to a .LEGAL.txt file
     legalComments: 'external',
     loader: { ".js": "jsx", ".py": "text" },
@@ -125,6 +125,7 @@ const context = await esbuild.context({
         sassPlugin({
             loadPaths: [...nodePaths, 'node_modules'],
             filter: /\.scss/,
+            type: 'css',
             quietDeps: true,
         }),
         notifyEndPlugin(),

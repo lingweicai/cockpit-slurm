@@ -3,7 +3,7 @@
         "cockpit": "137"
     },
 
-    "tools": {
+    "dashboard": {
         "index": {
             "label": "Cockpit SLURM"
         }
