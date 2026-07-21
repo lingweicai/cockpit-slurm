@@ -92,7 +92,7 @@ const context = await esbuild.context({
     bundle: true,
     entryPoints: ['./src/index.tsx'],
     // Allow external font files which live in ../../static/fonts
-    external: ['cockpit', 'cockpit-dark-theme', '*.woff', '*.woff2', '*.jpg', '*.svg', '../../assets*'],
+    external: ['cockpit-dark-theme', '*.woff', '*.woff2', '*.jpg', '*.svg', '../../assets*'],
     // Move all legal comments to a .LEGAL.txt file
     legalComments: 'external',
     loader: { ".js": "jsx", ".py": "text" },
