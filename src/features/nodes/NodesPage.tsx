@@ -6,8 +6,6 @@ import {
     Drawer,
     DrawerContent,
     DrawerContentBody,
-    Gallery,
-    GalleryItem,
     FormSelect,
     FormSelectOption,
     Progress,
@@ -31,7 +29,6 @@ import { buildCopyNameRowAction, buildDetailsRowAction } from '../../lib/rowActi
 import { LoadingState } from '../../components/LoadingState';
 import { fetchNodes, subscribeNodeUpdates } from '../../services/nodesChannel';
 import type { SinfoPartitionRow } from '../../types/sinfo';
-import type { SlurmNode } from '../../types/slurm-api';
 import { buildNodeSummaries, groupNodesByPrefix } from '../cluster/clusterData';
 import { applySlurmNodesDelta, resolveNodeSummaries, type SlurmNodesPayload } from './nodesData';
 import { type NodeSortKey, matchesNodeFilter, useNodesTableState } from './useNodesTableState';
@@ -44,6 +41,7 @@ type NodesPageProps = {
     updatedAt: string | null;
     waitMessage: string | null;
     error: string | null;
+    initialSelectedNode?: string | null;
 };
 
 function formatCount(value: number) {
@@ -87,9 +85,9 @@ function buildNodeRowActionItems(
     ];
 }
 
-export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error }: NodesPageProps) => {
+export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error, initialSelectedNode }: NodesPageProps) => {
     const [nodesPayload, setNodesPayload] = useState<SlurmNodesPayload | null>(null);
-    const [selectedNode, setSelectedNode] = useState<string | null>(null);
+    const [selectedNode, setSelectedNode] = useState<string | null>(initialSelectedNode ?? null);
     const { alert: actionMessage, showAlert: showActionMessage } = useTransientAlert();
     const nodes = useMemo(() => {
         const liveNodes = resolveNodeSummaries(nodesPayload);
@@ -152,10 +150,15 @@ export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error }: Node
     }, []);
 
     useEffect(() => {
+        if (initialSelectedNode && sortedNodes.some((node) => node.name === initialSelectedNode)) {
+            setSelectedNode(initialSelectedNode);
+            return;
+        }
+
         if (!selectedNode || !sortedNodes.some((node) => node.name === selectedNode)) {
             setSelectedNode(sortedNodes[0]?.name ?? null);
         }
-    }, [selectedNode, sortedNodes]);
+    }, [initialSelectedNode, selectedNode, sortedNodes]);
 
     const selected = useMemo(() => sortedNodes.find((node) => node.name === selectedNode) ?? null, [selectedNode, sortedNodes]);
     const totalNodes = sortedNodes.length;
@@ -275,21 +278,23 @@ export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error }: Node
 
             <Drawer isExpanded={Boolean(selected)}>
                 <DrawerContent
-                    panelContent={selected ? (
-                        <EntityDrawer
-                            title={cockpit.format(_('Selected node: $0'), selected.name)}
-                            onClose={() => setSelectedNode(null)}
-                        >
-                            <div style={{ display: 'grid', gap: '0.5rem' }}>
-                                <div><strong>{_('State')}:</strong> {selected.nodeState}</div>
-                                <div><strong>{_('Partitions')}:</strong> {selected.partitions.join(', ')}</div>
-                                <div><strong>{_('Availability')}:</strong> {selected.availability}</div>
-                                <div><strong>{_('Features')}:</strong> {selected.features.join(', ') || _('N/A')}</div>
-                                <div><strong>{_('Logical CPUs')}:</strong> {selected.cpus}</div>
-                                <div><strong>{_('Memory')}:</strong> {selected.memory}</div>
-                            </div>
-                        </EntityDrawer>
-                    ) : undefined}
+                    panelContent={selected
+                        ? (
+                            <EntityDrawer
+                                title={cockpit.format(_('Selected node: $0'), selected.name)}
+                                onClose={() => setSelectedNode(null)}
+                            >
+                                <div style={{ display: 'grid', gap: '0.5rem' }}>
+                                    <div><strong>{_('State')}:</strong> {selected.nodeState}</div>
+                                    <div><strong>{_('Partitions')}:</strong> {selected.partitions.join(', ')}</div>
+                                    <div><strong>{_('Availability')}:</strong> {selected.availability}</div>
+                                    <div><strong>{_('Features')}:</strong> {selected.features.join(', ') || _('N/A')}</div>
+                                    <div><strong>{_('Logical CPUs')}:</strong> {selected.cpus}</div>
+                                    <div><strong>{_('Memory')}:</strong> {selected.memory}</div>
+                                </div>
+                            </EntityDrawer>
+                        )
+                        : undefined}
                 >
                     <DrawerContentBody>
                         <Card>
@@ -342,7 +347,14 @@ export const NodesPage = ({ loading, rows, updatedAt, waitMessage, error }: Node
             </Drawer>
 
             {!loading && rows.length > 0 && (
-                <p>{cockpit.format(_('Last update: $0'), updatedAt ? new Date(updatedAt).toLocaleString() : _('Unknown'))}</p>
+                <p>
+                    {cockpit.format(
+                        _('Last update: $0'),
+                        updatedAt
+                            ? new Date(updatedAt).toLocaleString()
+                            : _('Unknown'),
+                    )}
+                </p>
             )}
         </div>
     );

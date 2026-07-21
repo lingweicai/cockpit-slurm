@@ -26,6 +26,7 @@ const _ = cockpit.gettext;
 type SubmissionState = {
     scriptText: string;
     scriptName: string;
+    rawScriptMode: boolean;
     partition: string;
     qos: string;
     nodes: string;
@@ -38,6 +39,7 @@ type SubmissionState = {
 const INITIAL_STATE: SubmissionState = {
     scriptText: '#!/bin/bash\n#SBATCH --job-name=demo\n',
     scriptName: 'job.sh',
+    rawScriptMode: false,
     partition: 'compute',
     qos: 'normal',
     nodes: '1',
@@ -47,11 +49,34 @@ const INITIAL_STATE: SubmissionState = {
     emailOnFinish: true,
 };
 
+function buildGeneratedScript(user: string, state: SubmissionState) {
+    const jobName = state.scriptName.replace(/\.[^.]+$/, '') || 'job';
+
+    return [
+        '#!/bin/bash',
+        `#SBATCH --job-name=${jobName}`,
+        `#SBATCH --partition=${state.partition}`,
+        `#SBATCH --qos=${state.qos}`,
+        `#SBATCH --nodes=${state.nodes}`,
+        `#SBATCH --cpus-per-task=${state.cpus}`,
+        `#SBATCH --mem=${state.memory}`,
+        state.emailOnFinish && state.email ? `#SBATCH --mail-user=${state.email}` : null,
+        state.emailOnFinish && state.email ? '#SBATCH --mail-type=END' : null,
+        '',
+        `# Submitted by ${user}`,
+        'module purge',
+        'module load gcc openmpi',
+        '',
+        'srun ./your-application',
+    ].filter((line): line is string => line !== null).join('\n');
+}
+
 export const SubmitJobPage = () => {
     const user = getCurrentUserName();
     const [state, setState] = useState<SubmissionState>(INITIAL_STATE);
     const [submitted, setSubmitted] = useState(false);
     const [submissionId] = useState(() => `sub-${Date.now().toString(36)}`);
+    const generatedScript = useMemo(() => buildGeneratedScript(user, state), [state, user]);
 
     const reviewText = useMemo(() => [
         `User: ${user}`,
@@ -61,7 +86,10 @@ export const SubmitJobPage = () => {
         `CPUs: ${state.cpus}`,
         `Memory: ${state.memory}`,
         `Email: ${state.email || 'n/a'}`,
+        `Mode: ${state.rawScriptMode ? 'raw script' : 'generated script'}`,
     ].join('\n'), [state, user]);
+
+    const previewText = state.rawScriptMode ? state.scriptText : generatedScript;
 
     return (
         <Card>
@@ -89,6 +117,14 @@ export const SubmitJobPage = () => {
                                     onTextChange={(_event, text) => setState((current) => ({ ...current, scriptText: text }))}
                                     onFileInputChange={(_event, file) => setState((current) => ({ ...current, scriptName: file.name }))}
                                     onClearClick={() => setState((current) => ({ ...current, scriptText: '', scriptName: '' }))}
+                                />
+                            </FormGroup>
+                            <FormGroup fieldId="raw-script-mode">
+                                <Checkbox
+                                    id="raw-script-mode"
+                                    label={_('Use raw script mode')}
+                                    isChecked={state.rawScriptMode}
+                                    onChange={(_event, checked) => setState((current) => ({ ...current, rawScriptMode: checked }))}
                                 />
                             </FormGroup>
                         </Form>
@@ -142,6 +178,10 @@ export const SubmitJobPage = () => {
                         <Card isPlain>
                             <CardTitle>{_('Review submission')}</CardTitle>
                             <CardBody>
+                                <div style={{ display: 'grid', gap: '0.5rem', marginBottom: '1rem' }}>
+                                    <div><strong>{_('Submission mode')}:</strong> {state.rawScriptMode ? _('Raw script') : _('Generated script')}</div>
+                                    <pre style={{ whiteSpace: 'pre-wrap' }}>{previewText}</pre>
+                                </div>
                                 <pre style={{ whiteSpace: 'pre-wrap' }}>{reviewText}</pre>
                                 <Progress value={100} title={_('Ready to submit')} label={_('Ready')} aria-label={_('Ready to submit')} />
                                 <Button variant="primary" onClick={() => setSubmitted(true)}>{_('Submit job')}</Button>

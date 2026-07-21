@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
     Badge,
-    Button,
     Card,
     CardBody,
     CardTitle,
@@ -9,8 +8,6 @@ import {
     DrawerContent,
     DrawerPanelBody,
     DrawerPanelContent,
-    Gallery,
-    GalleryItem,
     Tab,
     Tabs,
     TabTitleText,
@@ -38,6 +35,7 @@ const _ = cockpit.gettext;
 
 type JobsPageProps = {
     role: AppRole;
+    initialSelectedJob: string | null;
 };
 
 type DrawerTabKey = 'general' | 'resources' | 'environment' | 'stdout' | 'stderr' | 'history';
@@ -172,7 +170,7 @@ function buildJobRowActionItems(
     ];
 }
 
-export const JobsPage = ({ role }: JobsPageProps) => {
+export const JobsPage = ({ role, initialSelectedJob }: JobsPageProps) => {
     const [jobsPayload, setJobsPayload] = useState<{ jobs: SlurmJob[] } | null>(null);
     const jobs = useMemo(() => resolveJobRows(jobsPayload), [jobsPayload]);
     const {
@@ -186,9 +184,19 @@ export const JobsPage = ({ role }: JobsPageProps) => {
         handleSortChange,
         resetFilters,
     } = useJobsTableState(jobs);
-    const [selectedJobId, setSelectedJobId] = useState<string | null>(jobs[0]?.jobId ?? null);
+    const [selectedJobId, setSelectedJobId] = useState<string | null>(initialSelectedJob ?? jobs[0]?.jobId ?? null);
     const [drawerTab, setDrawerTab] = useState<DrawerTabKey>('general');
     const { alert: actionMessage, showAlert: showActionMessage } = useTransientAlert();
+
+    const selectJob = (jobId: string) => {
+        const nextHash = `#jobs?job=${encodeURIComponent(jobId)}`;
+        if (window.location.hash !== nextHash) {
+            window.location.hash = nextHash;
+        }
+
+        setSelectedJobId(jobId);
+        setDrawerTab('general');
+    };
 
     useEffect(() => {
         let isMounted = true;
@@ -226,10 +234,15 @@ export const JobsPage = ({ role }: JobsPageProps) => {
     }, []);
 
     useEffect(() => {
+        if (initialSelectedJob && jobs.some((job) => job.jobId === initialSelectedJob)) {
+            setSelectedJobId(initialSelectedJob);
+            return;
+        }
+
         if (!selectedJobId || !jobs.some((job) => job.jobId === selectedJobId)) {
             setSelectedJobId(jobs[0]?.jobId ?? null);
         }
-    }, [jobs, selectedJobId]);
+    }, [initialSelectedJob, jobs, selectedJobId]);
 
     const selectedJob = filteredJobs.find((job) => job.jobId === selectedJobId) ?? filteredJobs[0] ?? null;
     const summary = useMemo(() => buildSummary(filteredJobs), [filteredJobs]);
@@ -298,15 +311,16 @@ export const JobsPage = ({ role }: JobsPageProps) => {
 
     return (
         <Drawer isExpanded={Boolean(selectedJob)} isInline>
-            <DrawerContent panelContent={selectedJob
-                ? (
-                    <DrawerDetails
-                    job={selectedJob}
-                    tabKey={drawerTab}
-                    setTabKey={setDrawerTab}
-                    />
-                )
-                : null}
+            <DrawerContent
+                panelContent={selectedJob
+                    ? (
+                        <DrawerDetails
+                            job={selectedJob}
+                            tabKey={drawerTab}
+                            setTabKey={setDrawerTab}
+                        />
+                    )
+                    : null}
             >
                 <div style={{ display: 'grid', gap: '1rem' }}>
                     <SummaryMetricsGallery metrics={summary} />
@@ -325,10 +339,10 @@ export const JobsPage = ({ role }: JobsPageProps) => {
                                     columns={tableColumns}
                                     rows={filteredJobs}
                                     rowKey={(job) => job.jobId}
-                                    onRowClick={(job) => setSelectedJobId(job.jobId)}
+                                    onRowClick={(job) => selectJob(job.jobId)}
                                     selectedRowKey={selectedJob?.jobId ?? null}
                                     rowActionsVariant="menu"
-                                    rowActionItems={(job) => buildJobRowActionItems(job, setSelectedJobId, showActionMessage)}
+                                    rowActionItems={(job) => buildJobRowActionItems(job, selectJob, showActionMessage)}
                                     pagination={{
                                         defaultPerPage: 10,
                                         perPageOptions: [10, 20, 50],

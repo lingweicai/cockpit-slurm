@@ -7,15 +7,23 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 
-import "cockpit-dark-theme";
-
 import { Application } from './app';
 
-// @ts-expect-error: PatternFly cockpit stylesheet is resolved at runtime
-import "patternfly/patternfly-6-cockpit.scss";
-// @ts-expect-error: app stylesheet is bundled by esbuild
+import 'patternfly/patternfly-6-cockpit.scss';
 import './app.scss';
 
-document.addEventListener("DOMContentLoaded", () => {
-    createRoot(document.getElementById("app")!).render(<Application />);
-});
+const mountApplication = () => {
+    const appRoot = document.getElementById('app');
+    if (!appRoot) {
+        console.error('cockpit-slurm mount failure: #app element not found');
+        return;
+    }
+
+    createRoot(appRoot).render(<Application />);
+};
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', mountApplication);
+} else {
+    mountApplication();
+}

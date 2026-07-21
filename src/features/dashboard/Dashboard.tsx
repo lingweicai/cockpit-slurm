@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import {
+    Alert,
     Card,
     CardBody,
     CardTitle,
@@ -10,7 +11,6 @@ import {
 
 import cockpit from 'cockpit';
 
-import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
 import { LoadingState } from '../../components/LoadingState';
 import type { SinfoPartitionRow } from '../../types/sinfo';
@@ -32,6 +32,12 @@ type DashboardMetric = {
     progress?: number;
     progressLabel?: string;
     progressVariant?: 'danger' | 'success' | 'warning';
+};
+
+type DashboardNotification = {
+    variant: 'danger' | 'warning' | 'info';
+    title: string;
+    message: string;
 };
 
 function formatCount(value: number) {
@@ -82,6 +88,19 @@ function formatSnapshotAge(value: string | null) {
     return cockpit.format(_('About $0 minute(s) old'), String(minutes));
 }
 
+function getSnapshotAgeMinutes(value: string | null) {
+    if (!value) {
+        return null;
+    }
+
+    const timestamp = new Date(value);
+    if (Number.isNaN(timestamp.getTime())) {
+        return null;
+    }
+
+    return (Date.now() - timestamp.getTime()) / 60_000;
+}
+
 function isDegradedPartition(row: SinfoPartitionRow) {
     const states = row.partitionState?.map((state) => state.toLowerCase()) ?? [];
     return states.some((state) => state.includes('down') || state.includes('drain') || state.includes('error'));
@@ -127,6 +146,58 @@ function buildMetrics(rows: SinfoPartitionRow[]): DashboardMetric[] {
     ];
 }
 
+function buildNotifications(rows: SinfoPartitionRow[], updatedAt: string | null): DashboardNotification[] {
+    const notifications: DashboardNotification[] = [];
+    const degradedPartitions = rows.filter(isDegradedPartition);
+    const nodesTotal = rows.reduce((sum, row) => sum + row.nodesTotal, 0);
+    const nodesAllocated = rows.reduce((sum, row) => sum + row.nodesAllocated, 0);
+    const cpusTotal = rows.reduce((sum, row) => sum + row.cpusTotal, 0);
+    const cpusAllocated = rows.reduce((sum, row) => sum + row.cpusAllocated, 0);
+    const snapshotAgeMinutes = getSnapshotAgeMinutes(updatedAt);
+
+    if (degradedPartitions.length > 0) {
+        notifications.push({
+            variant: 'danger',
+            title: cockpit.format(_('$0 partition(s) need attention'), String(degradedPartitions.length)),
+            message: degradedPartitions.map((row) => row.partitionName).join(', '),
+        });
+    }
+
+    if (nodesTotal > 0 && nodesAllocated / nodesTotal >= 0.8) {
+        notifications.push({
+            variant: 'warning',
+            title: _('Node capacity is nearing exhaustion'),
+            message: cockpit.format(_('Allocated nodes: $0 of $1'), formatCount(nodesAllocated), formatCount(nodesTotal)),
+        });
+    }
+
+    if (cpusTotal > 0 && cpusAllocated / cpusTotal >= 0.8) {
+        notifications.push({
+            variant: 'warning',
+            title: _('CPU capacity is nearing exhaustion'),
+            message: cockpit.format(_('Allocated CPUs: $0 of $1'), formatCount(cpusAllocated), formatCount(cpusTotal)),
+        });
+    }
+
+    if (snapshotAgeMinutes !== null && snapshotAgeMinutes >= 5) {
+        notifications.push({
+            variant: snapshotAgeMinutes >= 15 ? 'warning' : 'info',
+            title: _('Bridge cache snapshot is getting stale'),
+            message: formatSnapshotAge(updatedAt),
+        });
+    }
+
+    if (notifications.length === 0) {
+        notifications.push({
+            variant: 'info',
+            title: _('No active alerts'),
+            message: _('The current cluster snapshot does not show any immediate issues.'),
+        });
+    }
+
+    return notifications;
+}
+
 function MetricCard({ title, value, description, progress, progressLabel, progressVariant }: DashboardMetric) {
     return (
         <Card>
@@ -153,6 +224,7 @@ function MetricCard({ title, value, description, progress, progressLabel, progre
 
 export const Dashboard = ({ loading, rows, updatedAt, waitMessage, error }: DashboardProps) => {
     const metrics = useMemo(() => buildMetrics(rows), [rows]);
+    const notifications = useMemo(() => buildNotifications(rows, updatedAt), [rows, updatedAt]);
     const nodeTotals = useMemo(() => ({
         total: rows.reduce((sum, row) => sum + row.nodesTotal, 0),
         allocated: rows.reduce((sum, row) => sum + row.nodesAllocated, 0),
@@ -175,12 +247,18 @@ export const Dashboard = ({ loading, rows, updatedAt, waitMessage, error }: Dash
         return <ErrorState title={_('Unable to load dashboard')} message={error} />;
     }
 
-    if (!loading && rows.length === 0) {
-        return <EmptyState title={_('No cluster data is currently available.')} message={_('The bridge cache has not produced a snapshot yet.')} />;
-    }
-
     return (
         <div style={{ display: 'grid', gap: '1rem' }}>
+            {!loading && rows.length === 0 && (
+                <Alert
+                    variant="info"
+                    isInline
+                    title={_('No cluster snapshot is available yet')}
+                >
+                    {_('The bridge cache has not produced partition data yet. Showing baseline dashboard metrics.')}
+                </Alert>
+            )}
+
             <Gallery hasGutter>
                 {metrics.map((metric) => (
                     <GalleryItem key={metric.title}>
@@ -225,6 +303,24 @@ export const Dashboard = ({ loading, rows, updatedAt, waitMessage, error }: Dash
                     <div style={{ display: 'grid', gap: '0.5rem' }}>
                         <div>{cockpit.format(_('Last update: $0'), formatUpdatedAt(updatedAt))}</div>
                         <div>{formatSnapshotAge(updatedAt)}</div>
+                    </div>
+                </CardBody>
+            </Card>
+
+            <Card>
+                <CardTitle>{_('Notification center')}</CardTitle>
+                <CardBody>
+                    <div style={{ display: 'grid', gap: '0.75rem' }}>
+                        {notifications.map((notification) => (
+                            <Alert
+                                key={`${notification.variant}-${notification.title}`}
+                                variant={notification.variant}
+                                isInline
+                                title={notification.title}
+                            >
+                                {notification.message}
+                            </Alert>
+                        ))}
                     </div>
                 </CardBody>
             </Card>

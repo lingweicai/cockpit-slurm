@@ -5,7 +5,6 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Card, CardBody, CardTitle } from "@patternfly/react-core/dist/esm/components/Card/index.js";
 
 import cockpit from 'cockpit';
 
@@ -36,15 +35,22 @@ function isInitializedSinfoPayload(payload: { updated_at?: string | null }) {
     return Number.isFinite(timestamp) && timestamp > 0;
 }
 
-function renderPlaceholderPage(title: string, description: string) {
-    return (
-        <Card>
-            <CardTitle>{title}</CardTitle>
-            <CardBody>
-                <p>{description}</p>
-            </CardBody>
-        </Card>
-    );
+function parseHashRoute(hash: string) {
+    const cleanHash = hash.replace(/^#/, '');
+    const [pagePart, queryPart] = cleanHash.split('?', 2);
+    const query = new URLSearchParams(queryPart ?? '');
+
+    return {
+        pageId: pagePart,
+        selectedNode: query.get('node'),
+        selectedJob: query.get('job'),
+        selectedPartition: query.get('partition'),
+        selectedUser: query.get('user'),
+        selectedAccount: query.get('account'),
+        selectedReservation: query.get('reservation'),
+        selectedQos: query.get('qos'),
+        selectedReport: query.get('report'),
+    };
 }
 
 function renderPageContent(
@@ -56,7 +62,16 @@ function renderPageContent(
         updatedAt: string | null;
         waitMessage: string | null;
         error: string | null;
+        selectedNode: string | null;
+        selectedJob: string | null;
+        selectedPartition: string | null;
+        selectedUser: string | null;
+        selectedAccount: string | null;
+        selectedReservation: string | null;
+        selectedQos: string | null;
+        selectedReport: string | null;
     },
+    onSelectNode: (nodeName: string) => void,
 ) {
     switch (pageId) {
     case 'dashboard':
@@ -77,6 +92,7 @@ function renderPageContent(
                 updatedAt={state.updatedAt}
                 waitMessage={state.waitMessage}
                 error={state.error}
+                initialSelectedPartition={state.selectedPartition}
             />
         );
     case 'nodes':
@@ -87,6 +103,7 @@ function renderPageContent(
                 updatedAt={state.updatedAt}
                 waitMessage={state.waitMessage}
                 error={state.error}
+                initialSelectedNode={state.selectedNode}
             />
         );
     case 'cluster-overview':
@@ -97,10 +114,11 @@ function renderPageContent(
                 updatedAt={state.updatedAt}
                 waitMessage={state.waitMessage}
                 error={state.error}
+                onSelectNode={onSelectNode}
             />
         );
     case 'jobs':
-        return <JobsPage role={role} />;
+        return <JobsPage role={role} initialSelectedJob={state.selectedJob} />;
     case 'my-jobs':
         return <MyJobsPage />;
     case 'submit-job':
@@ -114,15 +132,23 @@ function renderPageContent(
     case 'accounts':
         return <AccountsPage />;
     case 'qos':
-        return <QosPage />;
+        return <QosPage initialSelectedQos={state.selectedQos} />;
     case 'reservations':
-        return <ReservationsPage />;
+        return <ReservationsPage initialSelectedReservation={state.selectedReservation} />;
     case 'reports':
-        return <ReportsPage />;
+        return <ReportsPage initialSelectedReport={state.selectedReport} />;
     case 'settings':
         return <SettingsPage />;
     default:
-        return renderPlaceholderPage(_('Dashboard'), _('Cluster health and summary widgets will be added here next.'));
+        return (
+            <Dashboard
+                loading={state.loading}
+                rows={state.rows}
+                updatedAt={state.updatedAt}
+                waitMessage={state.waitMessage}
+                error={state.error}
+            />
+        );
     }
 }
 
@@ -136,8 +162,40 @@ export const Application = () => {
     const [activeCluster, setActiveCluster] = useState('production');
     const [pageId, setPageId] = useState<AppPageId>(() => {
         const role = getCurrentRole();
-        const currentHash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '') : null;
-        return normalizePageId(currentHash, role);
+        const currentHash = typeof window !== 'undefined' ? window.location.hash : '';
+        return normalizePageId(parseHashRoute(currentHash).pageId, role);
+    });
+    const [selectedNode, setSelectedNode] = useState<string | null>(() => {
+        const currentHash = typeof window !== 'undefined' ? window.location.hash : '';
+        return parseHashRoute(currentHash).selectedNode;
+    });
+    const [selectedJob, setSelectedJob] = useState<string | null>(() => {
+        const currentHash = typeof window !== 'undefined' ? window.location.hash : '';
+        return parseHashRoute(currentHash).selectedJob;
+    });
+    const [selectedPartition, setSelectedPartition] = useState<string | null>(() => {
+        const currentHash = typeof window !== 'undefined' ? window.location.hash : '';
+        return parseHashRoute(currentHash).selectedPartition;
+    });
+    const [selectedUser, setSelectedUser] = useState<string | null>(() => {
+        const currentHash = typeof window !== 'undefined' ? window.location.hash : '';
+        return parseHashRoute(currentHash).selectedUser;
+    });
+    const [selectedAccount, setSelectedAccount] = useState<string | null>(() => {
+        const currentHash = typeof window !== 'undefined' ? window.location.hash : '';
+        return parseHashRoute(currentHash).selectedAccount;
+    });
+    const [selectedReservation, setSelectedReservation] = useState<string | null>(() => {
+        const currentHash = typeof window !== 'undefined' ? window.location.hash : '';
+        return parseHashRoute(currentHash).selectedReservation;
+    });
+    const [selectedQos, setSelectedQos] = useState<string | null>(() => {
+        const currentHash = typeof window !== 'undefined' ? window.location.hash : '';
+        return parseHashRoute(currentHash).selectedQos;
+    });
+    const [selectedReport, setSelectedReport] = useState<string | null>(() => {
+        const currentHash = typeof window !== 'undefined' ? window.location.hash : '';
+        return parseHashRoute(currentHash).selectedReport;
     });
     const role = getCurrentRole();
     const navigationItems = getNavigationItems(role);
@@ -232,7 +290,16 @@ export const Application = () => {
 
     useEffect(() => {
         const onHashChange = () => {
-            setPageId(normalizePageId(window.location.hash.replace(/^#/, ''), role));
+            const nextRoute = parseHashRoute(window.location.hash);
+            setPageId(normalizePageId(nextRoute.pageId, role));
+            setSelectedNode(nextRoute.selectedNode);
+            setSelectedJob(nextRoute.selectedJob);
+            setSelectedPartition(nextRoute.selectedPartition);
+            setSelectedUser(nextRoute.selectedUser);
+            setSelectedAccount(nextRoute.selectedAccount);
+            setSelectedReservation(nextRoute.selectedReservation);
+            setSelectedQos(nextRoute.selectedQos);
+            setSelectedReport(nextRoute.selectedReport);
         };
 
         window.addEventListener('hashchange', onHashChange);
@@ -260,6 +327,14 @@ export const Application = () => {
                         window.location.hash = nextHash;
                     }
                     setPageId(nextPageId);
+                    setSelectedNode(null);
+                    setSelectedJob(null);
+                    setSelectedPartition(null);
+                    setSelectedUser(null);
+                    setSelectedAccount(null);
+                    setSelectedReservation(null);
+                    setSelectedQos(null);
+                    setSelectedReport(null);
                 }}
             >
                 {renderPageContent(pageId, role, {
@@ -268,6 +343,28 @@ export const Application = () => {
                     updatedAt,
                     waitMessage,
                     error,
+                    selectedNode,
+                    selectedJob,
+                    selectedPartition,
+                    selectedUser,
+                    selectedAccount,
+                    selectedReservation,
+                    selectedQos,
+                    selectedReport,
+                }, (nodeName) => {
+                    const nextHash = `#nodes?node=${encodeURIComponent(nodeName)}`;
+                    if (window.location.hash !== nextHash) {
+                        window.location.hash = nextHash;
+                    }
+                    setPageId('nodes');
+                    setSelectedNode(nodeName);
+                    setSelectedJob(null);
+                    setSelectedPartition(null);
+                    setSelectedUser(null);
+                    setSelectedAccount(null);
+                    setSelectedReservation(null);
+                    setSelectedQos(null);
+                    setSelectedReport(null);
                 })}
             </AppShell>
         </ChannelProvider>

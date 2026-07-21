@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import {
     Breadcrumb,
     BreadcrumbItem,
@@ -9,6 +9,7 @@ import {
     Page,
     PageSection,
     PageSidebar,
+    TextInput,
     Title,
 } from '@patternfly/react-core';
 
@@ -44,24 +45,70 @@ export const AppShell = ({
     onNavigate,
     children,
 }: AppShellProps) => {
+    const [navigationQuery, setNavigationQuery] = useState('');
+
+    const filteredNavigationItems = useMemo(() => {
+        const normalizedQuery = navigationQuery.trim().toLowerCase();
+
+        if (!normalizedQuery) {
+            return navigationItems;
+        }
+
+        return navigationItems.filter((item) => {
+            return item.label.toLowerCase().includes(normalizedQuery) || item.id.toLowerCase().includes(normalizedQuery);
+        });
+    }, [navigationItems, navigationQuery]);
+
+    const handleNavigationSearch = () => {
+        const nextPage = filteredNavigationItems[0];
+        if (nextPage) {
+            onNavigate(nextPage.id);
+        }
+    };
+
     return (
         <Page
             sidebar={(
                 <PageSidebar>
-                    <Nav aria-label={_('Primary navigation')}>
-                        <NavList>
-                            {navigationItems.map((item) => (
-                                <NavItem
-                                    key={item.id}
-                                    itemId={item.id}
-                                    isActive={item.id === pageId}
-                                    onClick={() => onNavigate(item.id)}
-                                >
-                                    {item.label}
-                                </NavItem>
-                            ))}
-                        </NavList>
-                    </Nav>
+                    <div style={{ display: 'grid', gap: '0.75rem' }}>
+                        <div>
+                            <div style={{ marginBottom: '0.25rem' }}>{_('Search pages')}</div>
+                            <TextInput
+                                id="navigation-search"
+                                value={navigationQuery}
+                                onChange={(_event, value) => setNavigationQuery(value)}
+                                onKeyDown={(event) => {
+                                    if (event.key === 'Enter') {
+                                        handleNavigationSearch();
+                                    }
+                                }}
+                                placeholder={_('Search dashboard, nodes, jobs, or settings')}
+                                aria-label={_('Search pages')}
+                            />
+                            {navigationQuery && (
+                                <div style={{ marginTop: '0.25rem' }}>
+                                    {filteredNavigationItems.length > 0
+                                        ? cockpit.format(_('$0 match(es) found'), String(filteredNavigationItems.length))
+                                        : _('No matching pages')}
+                                </div>
+                            )}
+                        </div>
+
+                        <Nav aria-label={_('Primary navigation')}>
+                            <NavList>
+                                {filteredNavigationItems.map((item) => (
+                                    <NavItem
+                                        key={item.id}
+                                        itemId={item.id}
+                                        isActive={item.id === pageId}
+                                        onClick={() => onNavigate(item.id)}
+                                    >
+                                        {item.label}
+                                    </NavItem>
+                                ))}
+                            </NavList>
+                        </Nav>
+                    </div>
                 </PageSidebar>
             )}
         >

@@ -1,11 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-    Button,
     Card,
     CardBody,
     CardTitle,
-    Gallery,
-    GalleryItem,
 } from '@patternfly/react-core';
 
 import cockpit from 'cockpit';
@@ -23,7 +20,6 @@ import { buildCopyNameRowAction, buildToggleDetailsRowAction } from '../../lib/r
 import { LoadingState } from '../../components/LoadingState';
 import { fetchPartitions, subscribePartitionUpdates } from '../../services/partitionsChannel';
 import type { SinfoPartitionRow } from '../../types/sinfo';
-import type { SlurmPartition } from '../../types/slurm-api';
 import { buildPartitionSummaries, type PartitionSummary } from '../cluster/clusterData';
 import { applySlurmPartitionsDelta, resolvePartitionSummaries, type SlurmPartitionsPayload } from './partitionsData';
 import { type PartitionSortKey, matchesPartitionFilter, usePartitionsTableState } from './usePartitionsTableState';
@@ -36,6 +32,7 @@ type PartitionsPageProps = {
     updatedAt: string | null;
     waitMessage: string | null;
     error: string | null;
+    initialSelectedPartition: string | null;
 };
 
 function buildPartitionRowActionItems(
@@ -69,10 +66,10 @@ function isDegradedPartition(row: SinfoPartitionRow) {
     return states.some((state) => state.includes('down') || state.includes('drain') || state.includes('error'));
 }
 
-export const PartitionsPage = ({ loading, rows, updatedAt, waitMessage, error }: PartitionsPageProps) => {
+export const PartitionsPage = ({ loading, rows, updatedAt, waitMessage, error, initialSelectedPartition }: PartitionsPageProps) => {
     const [partitionsPayload, setPartitionsPayload] = useState<SlurmPartitionsPayload | null>(null);
     const [expandedPartition, setExpandedPartition] = useState<string | null>(null);
-    const [selectedPartition, setSelectedPartition] = useState<string | null>(null);
+    const [selectedPartition, setSelectedPartition] = useState<string | null>(initialSelectedPartition ?? null);
     const { alert: actionMessage, showAlert: showActionMessage } = useTransientAlert();
     const summaries = useMemo(() => {
         const liveSummaries = resolvePartitionSummaries(partitionsPayload);
@@ -138,10 +135,28 @@ export const PartitionsPage = ({ loading, rows, updatedAt, waitMessage, error }:
     }, [rows]);
 
     useEffect(() => {
-        if (!selectedPartition || !sortedSummaries.some((summary) => summary.partitionName === selectedPartition)) {
-            setSelectedPartition(sortedSummaries[0]?.partitionName ?? null);
+        if (initialSelectedPartition && sortedSummaries.some((summary) => summary.partitionName === initialSelectedPartition)) {
+            setSelectedPartition(initialSelectedPartition);
+            setExpandedPartition(initialSelectedPartition);
+            return;
         }
-    }, [selectedPartition, sortedSummaries]);
+
+        if (!selectedPartition || !sortedSummaries.some((summary) => summary.partitionName === selectedPartition)) {
+            const nextPartition = sortedSummaries[0]?.partitionName ?? null;
+            setSelectedPartition(nextPartition);
+            setExpandedPartition(nextPartition);
+        }
+    }, [initialSelectedPartition, selectedPartition, sortedSummaries]);
+
+    const selectPartition = (partitionName: string) => {
+        const nextHash = `#partitions?partition=${encodeURIComponent(partitionName)}`;
+        if (window.location.hash !== nextHash) {
+            window.location.hash = nextHash;
+        }
+
+        setSelectedPartition(partitionName);
+        setExpandedPartition(partitionName);
+    };
 
     const tableColumns: EntityTableColumn<PartitionSummary>[] = [
         {
@@ -216,10 +231,10 @@ export const PartitionsPage = ({ loading, rows, updatedAt, waitMessage, error }:
                             columns={tableColumns}
                             rows={sortedSummaries}
                             rowKey={(summary) => summary.partitionName}
-                            onRowClick={(summary) => setSelectedPartition(summary.partitionName)}
+                            onRowClick={(summary) => selectPartition(summary.partitionName)}
                             selectedRowKey={selectedPartition}
                             rowActionsVariant="menu"
-                            rowActionItems={(summary) => buildPartitionRowActionItems(summary, setSelectedPartition, (partitionName) => setExpandedPartition((current) => (current === partitionName ? null : partitionName)), showActionMessage)}
+                            rowActionItems={(summary) => buildPartitionRowActionItems(summary, selectPartition, (partitionName) => setExpandedPartition((current) => (current === partitionName ? null : partitionName)), showActionMessage)}
                             expandable={{
                                 expandedRowKey: expandedPartition,
                                 onToggle: (_summary, rowKey) => {

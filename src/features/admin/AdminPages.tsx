@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
     Alert,
     Badge,
@@ -99,10 +99,36 @@ function SummaryCards({ items }: { items: Array<{ title: string; value: string; 
 }
 
 export const UsersPage = () => {
+    const [selectedUser, setSelectedUser] = useState(USER_FIXTURES[0]?.name ?? null);
+
+    const selectUser = (userName: string) => {
+        const nextHash = `#users?user=${encodeURIComponent(userName)}`;
+        if (window.location.hash !== nextHash) {
+            window.location.hash = nextHash;
+        }
+
+        setSelectedUser(userName);
+    };
+
     const totalUsers = USER_FIXTURES.length;
     const activeUsers = USER_FIXTURES.filter((user) => user.state === 'ACTIVE').length;
     const pendingUsers = USER_FIXTURES.filter((user) => user.state === 'PENDING').length;
     const mfaUsers = USER_FIXTURES.filter((user) => user.mfaEnabled).length;
+    const selected = USER_FIXTURES.find((user) => user.name === selectedUser) ?? USER_FIXTURES[0] ?? null;
+
+    useEffect(() => {
+        const query = new URLSearchParams(window.location.hash.replace(/^#/, '').split('?', 2)[1] ?? '');
+        const selectedFromHash = query.get('user');
+
+        if (selectedFromHash && USER_FIXTURES.some((user) => user.name === selectedFromHash)) {
+            setSelectedUser(selectedFromHash);
+            return;
+        }
+
+        if (!selectedUser || !USER_FIXTURES.some((user) => user.name === selectedUser)) {
+            setSelectedUser(USER_FIXTURES[0]?.name ?? null);
+        }
+    }, [selectedUser]);
 
     return (
         <div style={{ display: 'grid', gap: '1rem' }}>
@@ -132,7 +158,7 @@ export const UsersPage = () => {
                         </Thead>
                         <Tbody>
                             {USER_FIXTURES.map((user) => (
-                                <Tr key={user.name}>
+                                <Tr key={user.name} onClick={() => selectUser(user.name)} isClickable isSelected={selected?.name === user.name}>
                                     <Td dataLabel={_('Name')}>{user.name}</Td>
                                     <Td dataLabel={_('Role')}>{user.role}</Td>
                                     <Td dataLabel={_('Accounts')}>{user.accounts.join(', ')}</Td>
@@ -148,14 +174,56 @@ export const UsersPage = () => {
                     </Table>
                 </CardBody>
             </Card>
+
+            {selected && (
+                <Card>
+                    <CardTitle>{cockpit.format(_('Selected user: $0'), selected.name)}</CardTitle>
+                    <CardBody>
+                        <div style={{ display: 'grid', gap: '0.5rem' }}>
+                            <div><strong>{_('Role')}:</strong> {selected.role}</div>
+                            <div><strong>{_('Accounts')}:</strong> {selected.accounts.join(', ')}</div>
+                            <div><strong>{_('State')}:</strong> <Badge isRead variant={badgeVariantForUser(selected.state)}>{selected.state}</Badge></div>
+                            <div><strong>{_('Last login')}:</strong> {formatTimestamp(selected.lastLogin)}</div>
+                            <div><strong>{_('MFA')}:</strong> {selected.mfaEnabled ? _('Enabled') : _('Disabled')}</div>
+                            <div><strong>{_('Default QOS')}:</strong> {selected.defaultQos}</div>
+                        </div>
+                    </CardBody>
+                </Card>
+            )}
         </div>
     );
 };
 
 export const AccountsPage = () => {
+    const [selectedAccount, setSelectedAccount] = useState(ACCOUNT_FIXTURES[0]?.name ?? null);
+
+    const selectAccount = (accountName: string) => {
+        const nextHash = `#accounts?account=${encodeURIComponent(accountName)}`;
+        if (window.location.hash !== nextHash) {
+            window.location.hash = nextHash;
+        }
+
+        setSelectedAccount(accountName);
+    };
+
     const totalUsed = ACCOUNT_FIXTURES.reduce((sum, account) => sum + account.cpuHoursUsed, 0);
     const totalLimit = ACCOUNT_FIXTURES.reduce((sum, account) => sum + account.cpuHoursLimit, 0);
     const limitedAccounts = ACCOUNT_FIXTURES.filter((account) => account.state === 'LIMITED').length;
+    const selected = ACCOUNT_FIXTURES.find((account) => account.name === selectedAccount) ?? ACCOUNT_FIXTURES[0] ?? null;
+
+    useEffect(() => {
+        const query = new URLSearchParams(window.location.hash.replace(/^#/, '').split('?', 2)[1] ?? '');
+        const selectedFromHash = query.get('account');
+
+        if (selectedFromHash && ACCOUNT_FIXTURES.some((account) => account.name === selectedFromHash)) {
+            setSelectedAccount(selectedFromHash);
+            return;
+        }
+
+        if (!selectedAccount || !ACCOUNT_FIXTURES.some((account) => account.name === selectedAccount)) {
+            setSelectedAccount(ACCOUNT_FIXTURES[0]?.name ?? null);
+        }
+    }, [selectedAccount]);
 
     return (
         <div style={{ display: 'grid', gap: '1rem' }}>
@@ -183,7 +251,7 @@ export const AccountsPage = () => {
                         </Thead>
                         <Tbody>
                             {ACCOUNT_FIXTURES.map((account) => (
-                                <Tr key={account.name}>
+                                <Tr key={account.name} onClick={() => selectAccount(account.name)} isClickable isSelected={selected?.name === account.name}>
                                     <Td dataLabel={_('Account')}>{account.name}</Td>
                                     <Td dataLabel={_('Parent')}>{account.parent}</Td>
                                     <Td dataLabel={_('Users')}>{formatCount(account.users)}</Td>
@@ -205,12 +273,54 @@ export const AccountsPage = () => {
                     </Table>
                 </CardBody>
             </Card>
+
+            {selected && (
+                <Card>
+                    <CardTitle>{cockpit.format(_('Selected account: $0'), selected.name)}</CardTitle>
+                    <CardBody>
+                        <div style={{ display: 'grid', gap: '0.5rem' }}>
+                            <div><strong>{_('Parent')}:</strong> {selected.parent}</div>
+                            <div><strong>{_('Users')}:</strong> {formatCount(selected.users)}</div>
+                            <div><strong>{_('Usage')}:</strong> {formatPercent(selected.cpuHoursUsed, selected.cpuHoursLimit)}</div>
+                            <div><strong>{_('CPU hours used')}:</strong> {formatCount(selected.cpuHoursUsed)}</div>
+                            <div><strong>{_('CPU hours limit')}:</strong> {formatCount(selected.cpuHoursLimit)}</div>
+                            <div><strong>{_('State')}:</strong> <Badge isRead variant={badgeVariantForAccount(selected.state)}>{selected.state}</Badge></div>
+                        </div>
+                    </CardBody>
+                </Card>
+            )}
         </div>
     );
 };
 
-export const QosPage = () => {
+export const QosPage = ({ initialSelectedQos }: { initialSelectedQos: string | null }) => {
+    const [selectedQos, setSelectedQos] = useState(initialSelectedQos ?? QOS_FIXTURES[0]?.name ?? null);
+
+    const selectQos = (qosName: string) => {
+        const nextHash = `#qos?qos=${encodeURIComponent(qosName)}`;
+        if (window.location.hash !== nextHash) {
+            window.location.hash = nextHash;
+        }
+
+        setSelectedQos(qosName);
+    };
+
     const enabledQos = QOS_FIXTURES.filter((qos) => qos.state === 'ENABLED').length;
+    const selected = QOS_FIXTURES.find((qos) => qos.name === selectedQos) ?? QOS_FIXTURES[0] ?? null;
+
+    useEffect(() => {
+        const query = new URLSearchParams(window.location.hash.replace(/^#/, '').split('?', 2)[1] ?? '');
+        const selectedFromHash = query.get('qos');
+
+        if (selectedFromHash && QOS_FIXTURES.some((qos) => qos.name === selectedFromHash)) {
+            setSelectedQos(selectedFromHash);
+            return;
+        }
+
+        if (!selectedQos || !QOS_FIXTURES.some((qos) => qos.name === selectedQos)) {
+            setSelectedQos(QOS_FIXTURES[0]?.name ?? null);
+        }
+    }, [selectedQos]);
 
     return (
         <div style={{ display: 'grid', gap: '1rem' }}>
@@ -240,7 +350,7 @@ export const QosPage = () => {
                         </Thead>
                         <Tbody>
                             {QOS_FIXTURES.map((qos) => (
-                                <Tr key={qos.name}>
+                                <Tr key={qos.name} onClick={() => selectQos(qos.name)} isClickable isSelected={selected?.name === qos.name}>
                                     <Td dataLabel={_('Name')}>{qos.name}</Td>
                                     <Td dataLabel={_('Priority')}>{qos.priority}</Td>
                                     <Td dataLabel={_('Max jobs')}>{qos.maxJobs}</Td>
@@ -256,13 +366,55 @@ export const QosPage = () => {
                     </Table>
                 </CardBody>
             </Card>
+
+            {selected && (
+                <Card>
+                    <CardTitle>{cockpit.format(_('Selected QOS: $0'), selected.name)}</CardTitle>
+                    <CardBody>
+                        <div style={{ display: 'grid', gap: '0.5rem' }}>
+                            <div><strong>{_('Priority')}:</strong> {selected.priority}</div>
+                            <div><strong>{_('Max jobs')}:</strong> {selected.maxJobs}</div>
+                            <div><strong>{_('Max nodes')}:</strong> {selected.maxNodes}</div>
+                            <div><strong>{_('Max wall time')}:</strong> {selected.maxWallTime}</div>
+                            <div><strong>{_('Preempt')}:</strong> {selected.preemptMode}</div>
+                            <div><strong>{_('State')}:</strong> <Badge isRead variant={badgeVariantForQos(selected.state)}>{selected.state}</Badge></div>
+                        </div>
+                    </CardBody>
+                </Card>
+            )}
         </div>
     );
 };
 
-export const ReservationsPage = () => {
+export const ReservationsPage = ({ initialSelectedReservation }: { initialSelectedReservation: string | null }) => {
+    const [selectedReservation, setSelectedReservation] = useState(initialSelectedReservation ?? RESERVATION_FIXTURES[0]?.name ?? null);
+
+    const selectReservation = (reservationName: string) => {
+        const nextHash = `#reservations?reservation=${encodeURIComponent(reservationName)}`;
+        if (window.location.hash !== nextHash) {
+            window.location.hash = nextHash;
+        }
+
+        setSelectedReservation(reservationName);
+    };
+
     const activeReservations = RESERVATION_FIXTURES.filter((reservation) => reservation.state === 'ACTIVE').length;
     const upcomingReservations = RESERVATION_FIXTURES.filter((reservation) => reservation.state === 'UPCOMING').length;
+    const selected = RESERVATION_FIXTURES.find((reservation) => reservation.name === selectedReservation) ?? RESERVATION_FIXTURES[0] ?? null;
+
+    useEffect(() => {
+        const query = new URLSearchParams(window.location.hash.replace(/^#/, '').split('?', 2)[1] ?? '');
+        const selectedFromHash = query.get('reservation');
+
+        if (selectedFromHash && RESERVATION_FIXTURES.some((reservation) => reservation.name === selectedFromHash)) {
+            setSelectedReservation(selectedFromHash);
+            return;
+        }
+
+        if (!selectedReservation || !RESERVATION_FIXTURES.some((reservation) => reservation.name === selectedReservation)) {
+            setSelectedReservation(RESERVATION_FIXTURES[0]?.name ?? null);
+        }
+    }, [selectedReservation]);
 
     return (
         <div style={{ display: 'grid', gap: '1rem' }}>
@@ -292,7 +444,7 @@ export const ReservationsPage = () => {
                         </Thead>
                         <Tbody>
                             {RESERVATION_FIXTURES.map((reservation) => (
-                                <Tr key={reservation.name}>
+                                <Tr key={reservation.name} onClick={() => selectReservation(reservation.name)} isClickable isSelected={selected?.name === reservation.name}>
                                     <Td dataLabel={_('Name')}>{reservation.name}</Td>
                                     <Td dataLabel={_('State')}>
                                         <Badge isRead variant={badgeVariantForReservation(reservation.state)}>{reservation.state}</Badge>
@@ -310,11 +462,54 @@ export const ReservationsPage = () => {
                     </Table>
                 </CardBody>
             </Card>
+
+            {selected && (
+                <Card>
+                    <CardTitle>{cockpit.format(_('Selected reservation: $0'), selected.name)}</CardTitle>
+                    <CardBody>
+                        <div style={{ display: 'grid', gap: '0.5rem' }}>
+                            <div><strong>{_('State')}:</strong> <Badge isRead variant={badgeVariantForReservation(selected.state)}>{selected.state}</Badge></div>
+                            <div><strong>{_('Window')}:</strong> {formatTimestamp(selected.startTime)} → {formatTimestamp(selected.endTime)}</div>
+                            <div><strong>{_('Nodes')}:</strong> {selected.nodes}</div>
+                            <div><strong>{_('Accounts')}:</strong> {selected.accounts.join(', ')}</div>
+                            <div><strong>{_('Users')}:</strong> {selected.users.join(', ')}</div>
+                            <div><strong>{_('Purpose')}:</strong> {selected.purpose}</div>
+                        </div>
+                    </CardBody>
+                </Card>
+            )}
         </div>
     );
 };
 
-export const ReportsPage = () => {
+export const ReportsPage = ({ initialSelectedReport }: { initialSelectedReport: string | null }) => {
+    const [selectedReport, setSelectedReport] = useState(initialSelectedReport ?? REPORT_FIXTURES[0]?.title ?? null);
+
+    const selectReport = (reportTitle: string) => {
+        const nextHash = `#reports?report=${encodeURIComponent(reportTitle)}`;
+        if (window.location.hash !== nextHash) {
+            window.location.hash = nextHash;
+        }
+
+        setSelectedReport(reportTitle);
+    };
+
+    const selected = REPORT_FIXTURES.find((report) => report.title === selectedReport) ?? REPORT_FIXTURES[0] ?? null;
+
+    useEffect(() => {
+        const query = new URLSearchParams(window.location.hash.replace(/^#/, '').split('?', 2)[1] ?? '');
+        const selectedFromHash = query.get('report');
+
+        if (selectedFromHash && REPORT_FIXTURES.some((report) => report.title === selectedFromHash)) {
+            setSelectedReport(selectedFromHash);
+            return;
+        }
+
+        if (!selectedReport || !REPORT_FIXTURES.some((report) => report.title === selectedReport)) {
+            setSelectedReport(REPORT_FIXTURES[0]?.title ?? null);
+        }
+    }, [selectedReport]);
+
     return (
         <div style={{ display: 'grid', gap: '1rem' }}>
             <SummaryCards
@@ -333,6 +528,23 @@ export const ReportsPage = () => {
                         <Progress value={63} title={_('Memory utilization')} label={_('63%')} aria-label={_('Memory utilization')} />
                         <Progress value={41} title={_('GPU utilization')} label={_('41%')} aria-label={_('GPU utilization')} />
                     </div>
+                </CardBody>
+            </Card>
+
+            <Card>
+                <CardTitle>{_('Selected report')}</CardTitle>
+                <CardBody>
+                    {selected && (
+                        <div style={{ display: 'grid', gap: '0.5rem' }}>
+                            <div><strong>{_('Title')}:</strong> {selected.title}</div>
+                            <div><strong>{_('Value')}:</strong> {selected.title === 'Cluster utilization' ? `${selected.value}%` : selected.value}</div>
+                            <div><strong>{_('Delta')}:</strong> {selected.delta}</div>
+                            <div><strong>{_('Description')}:</strong> {selected.description}</div>
+                            <Button variant="secondary" onClick={() => selectReport(selected.title)}>
+                                {_('Share this report')}
+                            </Button>
+                        </div>
+                    )}
                 </CardBody>
             </Card>
         </div>
