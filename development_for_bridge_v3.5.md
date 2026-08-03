@@ -1,0 +1,881 @@
+# cockpit-slurm Development Plan Version 3.5
+
+**Version 3.5** is much more coherent than Version 3.2 and 3.3, because it clearly distinguishes:
+
+* **Bridge** (the application/package)
+* **Architectural layers** inside the bridge
+* **Read path** (Query → Cache)
+* **Write path** (Command → Slurm → Refresh → Cache)
+* **Transport** (`cockpit.channel()` + `cockpit-slurm-channel`)
+* **Canonical Resource Model** as the center of the architecture.
+
+Adopt **CQRS (Command Query Responsibility Separation)** as one of the design principles. While the project doesn't need a full CQRS framework, following its separation of reads and writes naturally fits Slurm administration.
+
+# 1. Architecture Principles
+
+### Design Goals
+
+* Canonical Resource Model
+* Single Source of Truth
+* Event-driven Synchronization
+* CQRS (Command / Query Separation)
+* Slurm REST/OpenAPI Compatibility
+* Cockpit Native Integration
+* Transport-independent IPC Protocol
+* Multi-session Synchronization
+
+### Core Principles
+
+```text
+Queries read from the Cache.
+
+Commands modify Slurm.
+
+Command Adapters translate commands into Slurm operations.
+
+Resource Adapters synchronize Slurm state into Canonical Resources.
+
+Cache stores only authoritative state.
+
+Events notify subscribed clients.
+
+React consumes Snapshots + Events.
+
+cockpit-slurm-channel is transport only.
+
+cockpit-slurm-bridge owns cluster state.
+```
+
+# 2. Overall Architecture
+
+```text
+
+                                        Slurm Cluster
+                                              │
+                 ┌────────────────────────────┴────────────────────────────┐
+                 │                                                         │
+                 ▼                                                         ▼
+        Command Adapter Layer                                    Resource Adapter Layer
+     (sacctmgr, scontrol, REST...)                     (REST, squeue, scontrol, sacctmgr)
+                 │                                                         │
+                 └────────────────────────────┬────────────────────────────┘
+                                              │
+                             cockpit-slurm-bridge
+                                              │
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                        │
+│                         IPC Server (Unix Domain Socket)                                │
+│                                        │                                               │
+│                                        ▼                                               │
+│                             Protocol Dispatcher                                        │
+│                              ┌─────────┴─────────┐                                     │
+│                              ▼                   ▼                                     │
+│                     Query Controller     Command Controller                            │
+│                              │                   │                                     │
+│                              ▼                   ▼                                     │
+│                       Query Service      Command Service                               │
+│                              │                   │                                     │
+│                              │                   ▼                                     │
+│                              │          Command Adapter Layer                          │
+│                              │                   │                                     │
+│                              │                Slurm                                    │
+│                              │                   │                                     │
+│                              └──────────────┬────┘                                     │
+│                                             ▼                                          │
+│                                   Resource Service                                     │
+│                                             │                                          │
+│                                             ▼                                          │
+│                                  Resource Adapter Layer                                │
+│                                             │                                          │
+│                                             ▼                                          │
+│                                 Canonical Resource Layer                               │
+│                                             │                                          │
+│                                             ▼                                          │
+│                                      Resource Cache                                    │
+│                                             │                                          │
+│                                             ▼                                          │
+│                                         Event Bus                                      │
+│                                             │                                          │
+│                                             ▼                                          │
+│                                   Subscription Manager                                │
+└─────────────────────────────────────────────┬──────────────────────────────────────────┘
+                                              │
+                                   cockpit-slurm-channel
+                                              │
+                                     cockpit.channel()
+                                              │
+                                          React UI
+```
+
+# 3. Layer Responsibilities
+---
+## 3.1 IPC Server Layer
+
+Responsibilities
+
+* Unix Domain Socket server
+* NDJSON message framing
+* Read/write messages
+* Connection lifecycle
+* Dispatch messages
+
+This layer knows nothing about Slurm.
+
+---
+
+## 3.2 Protocol Dispatcher
+
+Responsibilities
+
+* Decode protocol messages
+* Validate schema
+* Route to:
+
+  * Query Controller
+  * Command Controller
+* Encode responses
+
+---
+
+## 3.3 Query Controller
+
+Responsibilities
+
+* Handle read-only requests
+* Read Canonical Resources from Cache
+* Return snapshots
+* Never communicate directly with Slurm
+
+Flow
+
+```text
+Query
+
+↓
+
+Cache
+
+↓
+
+Snapshot
+```
+
+---
+
+## 3.4 Command Controller
+
+Responsibilities
+
+* Validate commands
+* Authorization
+* Idempotency
+* Audit logging
+* Coordinate execution
+* Never update Cache directly
+
+Flow
+
+```text
+Command
+
+↓
+
+Command Adapter
+
+↓
+
+Slurm
+```
+
+---
+
+## 3.5 Command Adapter Layer
+
+Purpose
+
+Translate Canonical Commands into Slurm operations.
+
+Examples
+
+```text
+CreateAccount
+↓
+
+sacctmgr add account
+
+CancelJob
+↓
+
+scancel
+
+DrainNode
+↓
+
+scontrol update
+```
+
+This layer performs writes only.
+
+---
+
+## 3.6 Resource Adapter Layer
+
+Purpose
+
+Translate Slurm state into Canonical Resources.
+
+Sources
+
+```text
+slurmrestd
+
+squeue --json
+
+scontrol --json
+
+sacctmgr
+
+future adapters
+```
+
+Example
+
+```text
+squeue --json
+
+↓
+
+Job Adapter
+
+↓
+
+Canonical Job
+```
+
+This layer performs reads only.
+
+---
+
+## 3.7 Canonical Resource Layer
+
+Purpose
+
+Provide a stable domain model independent of Slurm CLI commands.
+
+Each resource contains
+
+```text
+Metadata
+
+Spec
+
+Status
+```
+
+Metadata
+
+```text
+Resource ID
+
+Kind
+
+Generation
+
+UpdatedAt
+
+Source
+```
+
+Spec
+
+```text
+Generated OpenAPI model
+```
+
+---
+
+## 3.8 Resource Cache
+
+Purpose
+
+Single Source of Truth inside the bridge.
+
+Responsibilities
+
+* Store resources
+* Maintain indexes
+* Resource lookup
+* Snapshot generation
+* Generation management
+
+The Cache never stores
+
+* UI state
+* Form submissions
+* Commands
+
+---
+
+## 3.9 Event Bus
+
+Purpose
+
+Generate resource events after Cache updates.
+
+Event types
+
+```text
+Created
+
+Updated
+
+Deleted
+```
+
+Examples
+
+```text
+AccountCreated
+
+JobUpdated
+
+NodeUpdated
+```
+
+---
+
+## 3.10 Subscription Manager
+
+Purpose
+
+Maintain active subscriptions.
+
+Each subscription contains
+
+```text
+Connection
+
+Resource Kind
+
+Filter
+
+Generation
+```
+
+Lifecycle
+
+```text
+Connect
+
+↓
+
+Subscribe
+
+↓
+
+Snapshot
+
+↓
+
+Events
+
+↓
+
+Disconnect
+```
+---
+
+## 3.11 Application Service Layer （additional）
+
+Contains:
+
+* Command Service
+* Query Service
+* Resource Service
+* Subscription Service
+* Event Service
+
+Purpose:
+
+* orchestrate workflows
+* isolate business logic
+* keep controllers simple
+* keep adapters simple
+
+
+# 4. Read Path (Query Flow)
+
+```text
+React
+
+↓
+
+cockpit.channel()
+
+↓
+
+cockpit-slurm-channel
+
+↓
+
+IPC Server
+
+↓
+
+Protocol Dispatcher
+
+↓
+
+Query Controller
+
+↓
+
+Resource Cache
+
+↓
+
+Snapshot
+
+↓
+
+React
+```
+
+No Slurm access.
+
+# 5. Write Path (Command Flow)
+
+```text
+React
+
+↓
+
+cockpit.channel()
+
+↓
+
+cockpit-slurm-channel
+
+↓
+
+IPC Server
+
+↓
+
+Protocol Dispatcher
+
+↓
+
+Command Controller
+
+↓
+
+Command Service
+
+↓
+
+Command Adapter
+
+↓
+
+Slurm
+
+↓
+
+Resource Service
+
+↓
+
+Resource Adapter
+
+↓
+
+Canonical Resource
+
+↓
+
+Cache
+
+↓
+
+Event Bus
+
+↓
+
+Subscription Manager
+
+↓
+
+React
+```
+
+Notice:
+
+The Cache is refreshed only through the Resource Adapter.
+
+The Command Adapter never modifies Cache.
+
+# 6. Synchronization Model
+
+Initial page load
+
+```text
+Subscribe(Job)
+
+↓
+
+Snapshot
+
+↓
+
+React
+```
+
+Normal operation
+
+```text
+Cache Updated
+
+↓
+
+JobUpdated Event
+
+↓
+
+React
+```
+
+No polling.
+
+# 7. Command Tracking
+
+Maintain a lightweight Command Cache.
+
+Responsibilities
+
+* Idempotency
+* Duplicate detection
+* Progress tracking
+
+States
+
+```text
+Pending
+
+Running
+
+Succeeded
+
+Failed
+```
+
+Retention
+
+5–30 minutes.
+
+# 8. Audit Logging
+
+Record
+
+* User
+* Timestamp
+* Command
+* Parameters
+* Resource
+* Result
+* Duration
+
+Do not log UI interactions.
+
+# 9. React Architecture
+
+Each Context Provider owns one subscription.
+
+```text
+JobProvider
+
+↓
+
+Subscribe(Job)
+```
+
+```text
+NodeProvider
+
+↓
+
+Subscribe(Node)
+```
+
+```text
+AccountProvider
+
+↓
+
+Subscribe(Account)
+```
+
+Each provider receives:
+
+```text
+Snapshot
+
+↓
+
+Events
+
+↓
+
+Update Context
+```
+
+# 10. Recommended Development Order
+
+### Phase 1
+
+Foundation
+
+```text
+IPC Protocol
+
+Canonical Resource Layer
+
+Resource Cache
+```
+
+### Phase 2
+
+Synchronization
+
+```text
+Resource Adapter Layer
+
+Event Bus
+
+Subscription Manager
+```
+
+### Phase 3
+
+Transport
+
+```text
+IPC Server
+
+cockpit-slurm-channel
+
+cockpit.channel()
+```
+
+### Phase 4
+
+Frontend
+
+```text
+React Context Providers
+
+Hooks
+
+PatternFly Components
+```
+
+### Phase 5
+
+Administration
+
+```text
+Command Controller
+
+Command Adapter Layer
+
+Audit Log
+
+Command Cache
+```
+# New in Version 3.3
+
+Compared with Version 3.2, Version 3.3 introduces these architectural refinements:
+
+| Area                  | Version 3.2                                | Version 3.3                                                                                                           |
+| --------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| Bridge                | Treated as a processing step in some flows | Explicitly defined as the application boundary containing all internal layers                                         |
+| Adapters              | Single generic Adapter Layer               | Split into **Command Adapter Layer** (writes) and **Resource Adapter Layer** (reads)                                  |
+| Controllers           | Implicit                                   | Explicit **Query Controller** and **Command Controller** beneath the Protocol Dispatcher                              |
+| Read/Write separation | Described conceptually                     | Formalized as CQRS with separate Read Path and Write Path diagrams                                                    |
+| Architecture overview | Layer list                                 | Complete end-to-end architecture showing transport, controllers, adapters, cache, events, subscriptions, and frontend |
+| Cache ownership       | Implied                                    | Explicit rule that only the Resource Adapter updates the Canonical Resource Cache                                     |
+| Data flow             | Partially described                        | Fully documented read and write flows from React to Slurm and back                                                    |
+
+
+# Version 3.5 — Identity & Authorization Architecture
+
+This version focuses on who is connected and what they are allowed to do.
+
+### Identity Model
+```text
+Cockpit Authentication
+        │
+        ▼
+Linux User
+(UID / GID / Username)
+        │
+        ▼
+Slurm User Lookup
+        │
+        ▼
+Slurm AdminLevel
+        │
+        ▼
+Capability Resolver
+        │
+        ▼
+SecurityContext
+        │
+        ▼
+React UI
+```
+### SecurityContext
+```text
+</>go
+type SecurityContext struct {
+    Username string
+
+    UID uint32
+    GID uint32
+
+    AdminLevel AdminLevel
+
+    Capabilities CapabilitySet
+
+    Accounts []string
+
+    DefaultAccount string
+}
+```
+Every IPC connection owns one SecurityContext.
+
+### Capability Model
+
+Instead of checking
+```text
+AdminLevel == Admin
+```
+everything checks
+```text
+Capabilities.ManageAccounts
+```
+or
+```text
+Capabilities.CancelJobs
+```
+This keeps the UI independent of Slurm's internal enum values.
+
+### Role Mapping
+
+| Slurm AdminLevel | UI Role       | Home Page                |
+| ---------------- | ------------- | ------------------------ |
+| Not Set          | Visitor       | Welcome / Not Configured |
+| None             | User          | User Dashboard           |
+| Operator         | Operator      | Operations Dashboard     |
+| Admin            | Administrator | Administration Dashboard |
+
+Notice:
+
+Users never see:
+```text
+AdminLevel=None
+```
+
+They see
+```text
+User Dashboard
+```
+---
+### Dynamic Navigation
+
+Instead of hardcoding menus.
+```text
+SecurityContext
+
+↓
+
+Capability Resolver
+
+↓
+
+Navigation Builder
+
+↓
+
+React Sidebar
+```
+
+Every page checks capabilities.
+
+---
+### Command Authorization
+
+Every command follows
+```text
+Command
+
+↓
+
+SecurityContext
+
+↓
+
+Capability Check
+
+↓
+
+Allowed?
+
+↓
+
+Command Service
+```
+
+before Slurm is called.
+
+---
+### React Context
+
+I'd introduce
+```text
+<UserProvider>
+
+↓
+
+SecurityContext
+
+↓
+
+Capabilities
+
+↓
+
+Navigation
+
+↓
+
+Pages
+```
+
+Every page simply asks
+```text
+const user = useUser();
+```
+
+# Recommendation for Version 4
+
+I think Version 3.5 is now at the point where it defines the architecture clearly enough to guide implementation. Rather than adding more conceptual layers, the next step should be **Version 4**, focused on turning this design into implementation specifications:
+
+* **IPC Protocol Specification v1.0** (message schemas, framing, versioning, error handling)
+* **Canonical Resource Specification** (Go interfaces, metadata, generics, generation IDs)
+* **Cache Specification** (indexes, snapshots, invalidation, concurrency)
+* **Event & Subscription Specification** (event contracts, filtering, replay, reconnect)
+* **Bridge Implementation Guide** (package layout, Go interfaces, testing strategy)
+* **React Integration Guide** (`cockpit.channel()`, Context Providers, hooks, reducers)
+
+That progression moves the project naturally from architectural design into implementation while preserving the clean separation of responsibilities established in Version 3.3.
