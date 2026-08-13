@@ -1,3 +1,5 @@
+# Development Plan for Cockpit-Slurm UI
+
 For an enterprise-grade HPC management platform built around your backend architecture:
 
 * `cockpit-slurm-bridge` (persistent backend service)
