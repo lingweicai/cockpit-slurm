@@ -215,7 +215,9 @@ You already use PatternFly expandable tables, which fit this model very well.
 
 # 6. Role-Based Home Pages
 
-You already have Admin/Operator/User roles.
+There are Admin/Coordinator/Operator/User/Visitor roles.
+
+Please refer to slurm documents: https://slurm.schedmd.com/sacctmgr.html#OPT_coordinator and https://slurm.schedmd.com/sacctmgr.html#SECTION_SPECIFICATIONS-FOR-USERS
 
 Different roles should see different landing pages.
 
@@ -233,12 +235,21 @@ Different roles should see different landing pages.
 * maintenance tasks
 * draining nodes
 
+## Coordinator
+* user management
+* account management
+
 ## User
 
 * my jobs
 * quota usage
 * project usage
 * favorite job templates
+
+## Visitor
+* news
+* Resources usage
+* registration 
 
 This reduces cognitive load dramatically.
 
@@ -747,8 +758,10 @@ type UserRole string
 const (
     RoleGuest    UserRole = "Not Set"
     RoleUser     UserRole = "User"
+    RoleCoordinator     UserRole = "Coordinator"
     RoleOperator UserRole = "Operator"
     RoleAdmin    UserRole = "Admin"
+ 
 )
 ```
 
@@ -758,6 +771,7 @@ UI mapping:
 | ------------- | ------------- |
 | Not Set       | Guest         |
 | User          | User          |
+| Coordinator   | Coordinator   |
 | Operator      | Operator      |
 | Admin         | Administrator |
 
@@ -789,6 +803,8 @@ My suggested hierarchy would therefore become:
 Guest
    ↓
 User
+   ↓
+Coordinator
    ↓
 Operator
    ↓
