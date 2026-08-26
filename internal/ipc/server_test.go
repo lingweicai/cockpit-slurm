@@ -5,9 +5,16 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
+
+func TestServerDoesNotStoreCancelFunc(t *testing.T) {
+	if _, ok := reflect.TypeOf(Server{}).FieldByName("cancel"); ok {
+		t.Fatal("Server should not store a context.CancelFunc in Phase 1B")
+	}
+}
 
 func TestServerListenAndClose(t *testing.T) {
 	socketDir := filepath.Join(t.TempDir(), "ipc")

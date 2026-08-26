@@ -21,10 +21,9 @@ type Server struct {
 
 	wg sync.WaitGroup
 
-	mu      sync.Mutex
-	closed  bool
-	cancel  context.CancelFunc
-	active  map[net.Conn]struct{}
+	mu     sync.Mutex
+	closed bool
+	active map[net.Conn]struct{}
 }
 
 // NewServer creates an IPC server.
@@ -71,6 +70,7 @@ func (s *Server) Listen() error {
 
 	s.listener = listener
 	s.closed = false
+	s.active = make(map[net.Conn]struct{})
 
 	return nil
 }
@@ -78,21 +78,19 @@ func (s *Server) Listen() error {
 // Serve accepts connections until the server is closed.
 func (s *Server) Serve(ctx context.Context) error {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
 	listener := s.listener
-	s.mu.Unlock()
-
 	if listener == nil {
+		s.mu.Unlock()
 		return errors.New("IPC server is not listening")
 	}
-
-	serveCtx, cancel := context.WithCancel(ctx)
-	s.mu.Lock()
-	s.cancel = cancel
-	s.active = make(map[net.Conn]struct{})
 	s.mu.Unlock()
 
 	go func() {
-		<-serveCtx.Done()
+		<-ctx.Done()
 		_ = s.Close()
 	}()
 
@@ -106,8 +104,15 @@ func (s *Server) Serve(ctx context.Context) error {
 			return fmt.Errorf("accept connection: %w", err)
 		}
 
-		s.trackConn(conn)
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			_ = conn.Close()
+			return nil
+		}
+		s.active[conn] = struct{}{}
 		s.wg.Add(1)
+		s.mu.Unlock()
 
 		go func(conn net.Conn) {
 			defer s.wg.Done()
@@ -116,7 +121,16 @@ func (s *Server) Serve(ctx context.Context) error {
 
 			// Phase 1B intentionally does not process application messages.
 			// Phase 1C will attach the protocol layer here.
-			<-serveCtx.Done()
+			// The handler exits when the socket is closed or the caller cancels context.
+			buf := make([]byte, 1)
+			for {
+				if ctx.Err() != nil {
+					return
+				}
+				if _, err := conn.Read(buf); err != nil {
+					return
+				}
+			}
 		}(conn)
 	}
 }
@@ -134,10 +148,6 @@ func (s *Server) Close() error {
 
 	listener := s.listener
 	s.listener = nil
-
-	if s.cancel != nil {
-		s.cancel()
-	}
 
 	active := make([]net.Conn, 0, len(s.active))
 	for conn := range s.active {
@@ -173,6 +183,10 @@ func (s *Server) isClosed() bool {
 func (s *Server) trackConn(conn net.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		_ = conn.Close()
+		return
+	}
 	if s.active == nil {
 		s.active = make(map[net.Conn]struct{})
 	}
