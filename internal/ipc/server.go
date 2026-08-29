@@ -8,11 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
+	"time"
 )
 
 const DefaultSocketPath = "/run/cockpit-slurm/bridge.sock"
 
 const socketFileMode = 0660
+
+var ErrSocketInUse = errors.New("unix socket is already in use")
 
 // Server provides a Unix-domain socket listener for cockpit-slurm.
 type Server struct {
@@ -213,5 +217,24 @@ func removeStaleSocket(path string) error {
 		return fmt.Errorf("socket path %q exists and is not a Unix socket", path)
 	}
 
-	return os.Remove(path)
+	conn, err := net.DialTimeout("unix", path, 250*time.Millisecond)
+	if err == nil {
+		_ = conn.Close()
+		return fmt.Errorf("%w: %s", ErrSocketInUse, path)
+	}
+
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Timeout() {
+		return fmt.Errorf("cannot determine whether unix socket %q is active: %w", path, err)
+	}
+
+	if !errors.Is(err, syscall.ECONNREFUSED) {
+		return fmt.Errorf("cannot determine whether unix socket %q is active: %w", path, err)
+	}
+
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("remove stale socket %q: %w", path, err)
+	}
+
+	return nil
 }

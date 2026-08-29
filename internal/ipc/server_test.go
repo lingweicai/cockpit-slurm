@@ -16,6 +16,25 @@ func TestServerDoesNotStoreCancelFunc(t *testing.T) {
 	}
 }
 
+func TestServerRejectsActiveSocket(t *testing.T) {
+	socketDir := filepath.Join(t.TempDir(), "ipc")
+	if err := os.MkdirAll(socketDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+
+	socketPath := filepath.Join(socketDir, "bridge.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("net.Listen() returned error: %v", err)
+	}
+	defer listener.Close()
+
+	server := NewServer(socketPath)
+	if err := server.Listen(); err == nil {
+		t.Fatal("Listen() should fail when another process is already listening")
+	}
+}
+
 func TestServerListenAndClose(t *testing.T) {
 	socketDir := filepath.Join(t.TempDir(), "ipc")
 	socketPath := filepath.Join(socketDir, "bridge.sock")

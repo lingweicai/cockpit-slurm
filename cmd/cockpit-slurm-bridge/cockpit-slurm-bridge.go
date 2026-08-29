@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"cockpit-slurm/internal/ipc"
+	"github.com/lingweicai/cockpit-slurm/internal/ipc"
 )
 
 func main() {
