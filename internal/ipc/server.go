@@ -2,14 +2,19 @@ package ipc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/lingweicai/cockpit-slurm/internal/dispatcher"
+	"github.com/lingweicai/cockpit-slurm/internal/protocol"
 )
 
 const DefaultSocketPath = "/run/cockpit-slurm/bridge.sock"
@@ -22,6 +27,7 @@ var ErrSocketInUse = errors.New("unix socket is already in use")
 type Server struct {
 	socketPath string
 	listener   net.Listener
+	dispatcher *dispatcher.MessageDispatcher
 
 	wg sync.WaitGroup
 
@@ -36,7 +42,10 @@ func NewServer(socketPath string) *Server {
 		socketPath = DefaultSocketPath
 	}
 
-	return &Server{socketPath: socketPath}
+	return &Server{
+		socketPath: socketPath,
+		dispatcher: dispatcher.NewDispatcher(),
+	}
 }
 
 // SocketPath returns the Unix socket path.
@@ -123,15 +132,35 @@ func (s *Server) Serve(ctx context.Context) error {
 			defer s.untrackConn(conn)
 			defer conn.Close()
 
-			// Phase 1B intentionally does not process application messages.
-			// Phase 1C will attach the protocol layer here.
-			// The handler exits when the socket is closed or the caller cancels context.
-			buf := make([]byte, 1)
+			dec := protocol.NewDecoder(conn)
+			enc := protocol.NewEncoder(conn)
+
 			for {
 				if ctx.Err() != nil {
 					return
 				}
-				if _, err := conn.Read(buf); err != nil {
+
+				msg, err := dec.Decode()
+				if err != nil {
+					if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+						return
+					}
+					payload, jsonErr := json.Marshal(map[string]string{
+						"code":    "INVALID_MESSAGE",
+						"message": err.Error(),
+					})
+					if jsonErr != nil {
+						return
+					}
+					resp := protocol.NewEnvelope("ERR", protocol.MessageError, payload)
+					if writeErr := enc.Encode(resp); writeErr != nil {
+						return
+					}
+					return
+				}
+
+				resp := s.dispatcher.Dispatch(ctx, msg)
+				if err := enc.Encode(resp); err != nil {
 					return
 				}
 			}
