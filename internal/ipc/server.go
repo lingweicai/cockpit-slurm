@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lingweicai/cockpit-slurm/internal/connection"
 	"github.com/lingweicai/cockpit-slurm/internal/dispatcher"
 	"github.com/lingweicai/cockpit-slurm/internal/protocol"
 )
@@ -28,6 +29,7 @@ type Server struct {
 	socketPath string
 	listener   net.Listener
 	dispatcher *dispatcher.MessageDispatcher
+	connections connection.ConnectionManager
 
 	wg sync.WaitGroup
 
@@ -45,6 +47,7 @@ func NewServer(socketPath string) *Server {
 	return &Server{
 		socketPath: socketPath,
 		dispatcher: dispatcher.NewDispatcher(),
+		connections: connection.NewConnectionManager(),
 	}
 }
 
@@ -132,11 +135,23 @@ func (s *Server) Serve(ctx context.Context) error {
 			defer s.untrackConn(conn)
 			defer conn.Close()
 
+			connState, err := connection.NewConnection(conn)
+			if err != nil {
+				_ = conn.Close()
+				return
+			}
+			if err := s.connections.Register(connState); err != nil {
+				_ = conn.Close()
+				return
+			}
+			defer s.connections.Unregister(connState.ID)
+			defer connState.Close()
+
 			dec := protocol.NewDecoder(conn)
 			enc := protocol.NewEncoder(conn)
 
 			for {
-				if ctx.Err() != nil {
+				if connState.Context.Err() != nil {
 					return
 				}
 
@@ -159,7 +174,7 @@ func (s *Server) Serve(ctx context.Context) error {
 					return
 				}
 
-				resp := s.dispatcher.Dispatch(ctx, msg)
+				resp := s.dispatcher.Dispatch(connState.Context, msg)
 				if err := enc.Encode(resp); err != nil {
 					return
 				}
@@ -196,6 +211,8 @@ func (s *Server) Close() error {
 	for _, conn := range active {
 		_ = conn.Close()
 	}
+
+	s.connections.CloseAll()
 
 	s.wg.Wait()
 

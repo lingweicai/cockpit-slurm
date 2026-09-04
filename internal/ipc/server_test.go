@@ -138,6 +138,10 @@ func TestServerDispatchesHelloOverSocket(t *testing.T) {
 		t.Fatalf("ValidateEnvelope(response) returned error: %v", err)
 	}
 
+	if server.connections.Count() != 1 {
+		t.Fatalf("active connection count = %d, want 1", server.connections.Count())
+	}
+
 	if err := server.Close(); err != nil {
 		t.Fatalf("Close() returned error: %v", err)
 	}
