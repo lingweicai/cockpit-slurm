@@ -1,0 +1,20 @@
+[Unit]
+Description=Cockpit Slurm
+After=slurmctld.service
+Wants=slurmctld.service
+
+[Service]
+Type=simple
+User=cockpit-slurm
+Group=cockpit-slurm
+RuntimeDirectory=cockpit-slurm
+RuntimeDirectoryMode=0750
+ExecStart=/usr/local/bin/cockpit-slurm
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

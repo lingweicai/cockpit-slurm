@@ -41,33 +41,31 @@ make
 
 `make install` compiles and installs the package of dist built with directory of src for frontend files in `/usr/local/share/cockpit`. 
 
-install backend executable of cockpit-slurm-bridge and cockpit-slurm-channel for in path below: 
-`/usr/local/sbin/cockpit-slurm-bridge`
-`/usr/local/libexec/cockpit-slurm-channel`
+install the backend executable at:
+`/usr/local/bin/cockpit-slurm`
 
 and socket file to the path:
-`/run/cockpit-slurm/bridge.sock`
+`/run/cockpit-slurm/cockpit-slurm.sock`
 
 ## Install with RPM package
 For Redhat/RockyLinux RPM package of `production` mode, install front end dist directory to: 
 `/usr/share/cockpit` 
 and backend files to:
-`/usr/sbin/cockpit-slurm-bridge`
-`/usr/libexec/cockpit-slurm-channel`
-`/run/cockpit-slurm/bridge.sock`
+`/usr/bin/cockpit-slurm`
+`/run/cockpit-slurm/cockpit-slurm.sock`
 
-To start cockpit-slurm-bridge service in backend, run command 
-`sudo systemctl start cockpit-slurm-bridge`
+To start the cockpit-slurm service in the backend, run:
+`sudo systemctl start cockpit-slurm`
 
 ## Install for development user
 
 For development, you usually want to run your module straight out of the git
 tree. To do that, run `make devel-install`, which links your checkout to the
-location were cockpit-bridge looks for packages, installs bridge/channel under
+location where Cockpit looks for packages, installs the backend under
 `~/.local/libexec/cockpit-slurm`, and creates `~/.local/bin` symlinks. It also
-configures `COCKPIT_SLURM_BRIDGE_SOCKET_PATH` to:
+configures `COCKPIT_SLURM_SOCKET_PATH` to:
 
-`/run/user/<uid>/cockpit-slurm/bridge.sock`
+`/run/user/<uid>/cockpit-slurm/cockpit-slurm.sock`
 
 If you prefer to do this manually:
 
@@ -93,16 +91,16 @@ When developing against a virtual machine, watch mode can also automatically upl
 the code changes by setting the `RSYNC` environment variable to
 the remote hostname.
 
-If you are testing locally with a custom bridge socket path, the frontend now supports
-a runtime override via a browser global. Set it to the same path used by the bridge process:
+If you are testing locally with a custom socket path, the frontend now supports
+a runtime override via a browser global. Set it to the same path used by the backend process:
 
 ```js
-window.COCKPIT_SLURM_BRIDGE_SOCKET_PATH = "/run/user/1000/cockpit-slurm/bridge.sock";
+window.COCKPIT_SLURM_SOCKET_PATH = "/run/user/1000/cockpit-slurm/cockpit-slurm.sock";
 ```
 
 This browser global is only required for local development testing where the frontend is
-running against a non-standard bridge socket path. If that override is not set, the client
-falls back to the default socket path at `/run/cockpit-slurm/bridge.sock`.
+running against a non-standard socket path. If that override is not set, the client
+falls back to the default socket path at `/run/cockpit-slurm/cockpit-slurm.sock`.
 
     RSYNC=c make watch
 

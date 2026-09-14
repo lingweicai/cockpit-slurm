@@ -82,7 +82,7 @@ type helloHandler struct {
 
 func (h helloHandler) Handle(ctx context.Context, msg protocol.Envelope) protocol.Envelope {
 	payload, err := json.Marshal(map[string]string{
-		"server":        "cockpit-slurm-bridge",
+		"server":        "cockpit-slurm",
 		"serverVersion": "0.1.0",
 	})
 	if err != nil {

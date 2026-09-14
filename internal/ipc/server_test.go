@@ -25,7 +25,7 @@ func TestServerRejectsActiveSocket(t *testing.T) {
 		t.Fatalf("MkdirAll() returned error: %v", err)
 	}
 
-	socketPath := filepath.Join(socketDir, "bridge.sock")
+	socketPath := filepath.Join(socketDir, "cockpit-slurm.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("net.Listen() returned error: %v", err)
@@ -39,8 +39,8 @@ func TestServerRejectsActiveSocket(t *testing.T) {
 }
 
 func TestServerUsesEnvironmentSocketOverride(t *testing.T) {
-	want := filepath.Join(t.TempDir(), "custom", "bridge.sock")
-	t.Setenv("COCKPIT_SLURM_BRIDGE_SOCKET_PATH", want)
+	want := filepath.Join(t.TempDir(), "custom", "cockpit-slurm.sock")
+	t.Setenv("COCKPIT_SLURM_SOCKET_PATH", want)
 
 	server := NewServer("")
 	if got := server.SocketPath(); got != want {
@@ -50,7 +50,7 @@ func TestServerUsesEnvironmentSocketOverride(t *testing.T) {
 
 func TestServerListenAndClose(t *testing.T) {
 	socketDir := filepath.Join(t.TempDir(), "ipc")
-	socketPath := filepath.Join(socketDir, "bridge.sock")
+	socketPath := filepath.Join(socketDir, "cockpit-slurm.sock")
 
 	server := NewServer(socketPath)
 	if err := server.Listen(); err != nil {
@@ -100,7 +100,7 @@ func TestServerListenAndClose(t *testing.T) {
 
 func TestServerDispatchesHelloOverSocket(t *testing.T) {
 	socketDir := filepath.Join(t.TempDir(), "ipc")
-	socketPath := filepath.Join(socketDir, "bridge.sock")
+	socketPath := filepath.Join(socketDir, "cockpit-slurm.sock")
 
 	server := NewServer(socketPath)
 	if err := server.Listen(); err != nil {

@@ -18,10 +18,10 @@ import (
 	"github.com/lingweicai/cockpit-slurm/internal/protocol"
 )
 
-const DefaultSocketPath = "/run/cockpit-slurm/bridge.sock"
+const DefaultSocketPath = "/run/cockpit-slurm/cockpit-slurm.sock"
 
 func socketPathFromEnv() string {
-	if path := os.Getenv("COCKPIT_SLURM_BRIDGE_SOCKET_PATH"); path != "" {
+	if path := os.Getenv("COCKPIT_SLURM_SOCKET_PATH"); path != "" {
 		return path
 	}
 	return DefaultSocketPath
