@@ -38,6 +38,16 @@ func TestServerRejectsActiveSocket(t *testing.T) {
 	}
 }
 
+func TestServerUsesEnvironmentSocketOverride(t *testing.T) {
+	want := filepath.Join(t.TempDir(), "custom", "bridge.sock")
+	t.Setenv("COCKPIT_SLURM_BRIDGE_SOCKET_PATH", want)
+
+	server := NewServer("")
+	if got := server.SocketPath(); got != want {
+		t.Fatalf("SocketPath() = %q, want %q", got, want)
+	}
+}
+
 func TestServerListenAndClose(t *testing.T) {
 	socketDir := filepath.Join(t.TempDir(), "ipc")
 	socketPath := filepath.Join(socketDir, "bridge.sock")

@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	server := ipc.NewServer(ipc.DefaultSocketPath)
+	server := ipc.NewServer("")
 
 	if err := server.Listen(); err != nil {
 		log.Fatalf("listen for IPC socket: %v", err)

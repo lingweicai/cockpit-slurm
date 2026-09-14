@@ -20,6 +20,13 @@ import (
 
 const DefaultSocketPath = "/run/cockpit-slurm/bridge.sock"
 
+func socketPathFromEnv() string {
+	if path := os.Getenv("COCKPIT_SLURM_BRIDGE_SOCKET_PATH"); path != "" {
+		return path
+	}
+	return DefaultSocketPath
+}
+
 const socketFileMode = 0660
 
 var ErrSocketInUse = errors.New("unix socket is already in use")
@@ -41,7 +48,7 @@ type Server struct {
 // NewServer creates an IPC server.
 func NewServer(socketPath string) *Server {
 	if socketPath == "" {
-		socketPath = DefaultSocketPath
+		socketPath = socketPathFromEnv()
 	}
 
 	return &Server{
