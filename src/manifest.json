@@ -1,11 +1,10 @@
 {
-    "requires": {
-        "cockpit": "137"
-    },
-
-    "dashboard": {
-        "index": {
-            "label": "Cockpit SLURM"
-        }
+  "requires": {
+    "cockpit": "137"
+  },
+  "dashboard": {
+    "index": {
+      "label": "cockpit-slurm"
     }
+  }
 }

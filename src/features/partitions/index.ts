@@ -1,1 +1,0 @@
-export { PartitionsPage } from './PartitionsPage';
