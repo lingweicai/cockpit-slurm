@@ -12,4 +12,11 @@ declare const cockpit: {
     watch: (callback: (content?: string) => void) => void;
     close: () => void;
   };
+  spawn(args: string[]): Promise<string>;
 };
+
+declare global {
+  interface Window {
+    COCKPIT_SLURM_SOCKET_PATH?: string;
+  }
+}

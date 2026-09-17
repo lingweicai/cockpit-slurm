@@ -50,6 +50,9 @@ func TestDispatchPingReturnsPong(t *testing.T) {
 	if resp.MessageID == "" {
 		t.Fatal("MessageID is empty")
 	}
+	if resp.MessageID != msg.MessageID {
+		t.Fatalf("MessageID = %q, want %q", resp.MessageID, msg.MessageID)
+	}
 	if err := protocol.ValidateEnvelope(resp); err != nil {
 		t.Fatalf("ValidateEnvelope(response) returned error: %v", err)
 	}

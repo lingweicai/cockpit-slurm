@@ -44,18 +44,18 @@ func (d *MessageDispatcher) register(t protocol.MessageType, h Handler) {
 // If the message type is unknown, it returns an UNKNOWN_MESSAGE_TYPE error.
 func (d *MessageDispatcher) Dispatch(ctx context.Context, msg protocol.Envelope) protocol.Envelope {
 	if msg.Protocol != protocol.ProtocolName || msg.Version != protocol.ProtocolVersion {
-		return d.errorEnvelope("INVALID_MESSAGE", "invalid protocol envelope")
+		return d.errorEnvelope(msg.MessageID, "INVALID_MESSAGE", "invalid protocol envelope")
 	}
 	if msg.MessageID == "" || msg.Type == "" || len(msg.Payload) == 0 {
-		return d.errorEnvelope("INVALID_MESSAGE", "invalid protocol envelope")
+		return d.errorEnvelope(msg.MessageID, "INVALID_MESSAGE", "invalid protocol envelope")
 	}
 
 	h, ok := d.handlers[msg.Type]
 	if !ok {
 		if msg.Type.IsKnown() {
-			return d.errorEnvelope("NOT_IMPLEMENTED", fmt.Sprintf("message type %q is not implemented", msg.Type))
+			return d.errorEnvelope(msg.MessageID, "NOT_IMPLEMENTED", fmt.Sprintf("message type %q is not implemented", msg.Type))
 		}
-		return d.errorEnvelope("UNKNOWN_MESSAGE_TYPE", fmt.Sprintf("unknown message type %q", msg.Type))
+		return d.errorEnvelope(msg.MessageID, "UNKNOWN_MESSAGE_TYPE", fmt.Sprintf("unknown message type %q", msg.Type))
 	}
 
 	return h.Handle(ctx, msg)
@@ -65,7 +65,10 @@ func (d *MessageDispatcher) nextMessageID() string {
 	return fmt.Sprintf("MSG%06d", d.counter.Add(1))
 }
 
-func (d *MessageDispatcher) errorEnvelope(code, message string) protocol.Envelope {
+func (d *MessageDispatcher) errorEnvelope(messageID, code, message string) protocol.Envelope {
+	if messageID == "" {
+		messageID = d.nextMessageID()
+	}
 	payload, err := json.Marshal(map[string]string{
 		"code":    code,
 		"message": message,
@@ -73,7 +76,7 @@ func (d *MessageDispatcher) errorEnvelope(code, message string) protocol.Envelop
 	if err != nil {
 		payload = []byte(`{"code":"INTERNAL_ERROR","message":"failed to encode error payload"}`)
 	}
-	return protocol.NewEnvelope(d.nextMessageID(), protocol.MessageError, payload)
+	return protocol.NewEnvelope(messageID, protocol.MessageError, payload)
 }
 
 type helloHandler struct {
@@ -86,9 +89,9 @@ func (h helloHandler) Handle(ctx context.Context, msg protocol.Envelope) protoco
 		"serverVersion": "0.1.0",
 	})
 	if err != nil {
-		return h.dispatcher.errorEnvelope("HANDLER_ERROR", "hello handler failed to encode response")
+		return h.dispatcher.errorEnvelope(msg.MessageID, "HANDLER_ERROR", "hello handler failed to encode response")
 	}
-	return protocol.NewEnvelope(h.dispatcher.nextMessageID(), protocol.MessageHelloResponse, payload)
+	return protocol.NewEnvelope(msg.MessageID, protocol.MessageHelloResponse, payload)
 }
 
 type pingHandler struct {
@@ -100,7 +103,7 @@ func (h pingHandler) Handle(ctx context.Context, msg protocol.Envelope) protocol
 		"status": "ok",
 	})
 	if err != nil {
-		return h.dispatcher.errorEnvelope("HANDLER_ERROR", "ping handler failed to encode response")
+		return h.dispatcher.errorEnvelope(msg.MessageID, "HANDLER_ERROR", "ping handler failed to encode response")
 	}
-	return protocol.NewEnvelope(h.dispatcher.nextMessageID(), protocol.MessagePong, payload)
+	return protocol.NewEnvelope(msg.MessageID, protocol.MessagePong, payload)
 }

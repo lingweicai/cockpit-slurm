@@ -1,9 +1,22 @@
 import { type IpcChannel, type MessageHandler } from './types';
 
-export function createChannel(socketPath = '/run/cockpit-slurm/cockpit-slurm.sock'): IpcChannel {
+export function resolveSocketPath(socketPath?: string): string {
+  const windowSocket = typeof window !== 'undefined'
+    ? (window as Window & { COCKPIT_SLURM_SOCKET_PATH?: string }).COCKPIT_SLURM_SOCKET_PATH
+    : undefined;
+  const configured = socketPath ?? windowSocket ?? undefined;
+  if (configured && configured.trim() !== '') {
+    return configured;
+  }
+
+  return '/run/cockpit-slurm/cockpit-slurm.sock';
+}
+
+export function createChannel(socketPath?: string): IpcChannel {
+  const resolved = resolveSocketPath(socketPath);
   const channel = cockpit.channel({
     payload: 'stream',
-    unix: socketPath,
+    unix: resolved,
     binary: true,
   });
 
