@@ -2,9 +2,7 @@ declare const cockpit: {
   channel(options: Record<string, unknown>): {
     close: () => void;
     send: (data: Uint8Array | ArrayBuffer | number[]) => void;
-    onmessage: ((message: unknown) => void) | null;
-    onerror?: ((error: unknown) => void) | null;
-    onclose?: (() => void) | null;
+    addEventListener: (event: string, handler: (event: unknown, data: unknown) => void) => void;
   };
   gettext(value: string): string;
   format(value: string, ...args: unknown[]): string;

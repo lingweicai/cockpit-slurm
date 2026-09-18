@@ -12,7 +12,6 @@ SPEC=$(RPM_NAME).spec
 PREFIX ?= /usr/local
 DEVEL_PREFIX ?= $(HOME)/.local
 DEVEL_COCKPIT_DIR = $(DEVEL_PREFIX)/share/cockpit
-DEVEL_LIBEXECDIR = $(DEVEL_PREFIX)/libexec/cockpit-slurm
 DEVEL_BINDIR = $(DEVEL_PREFIX)/bin
 DEVEL_ENV_DIR = $(HOME)/.config/environment.d
 DEVEL_ENV_FILE = $(DEVEL_ENV_DIR)/cockpit-slurm-devel.conf
@@ -115,7 +114,6 @@ install: $(DIST_TEST) po/LINGUAS $(APP_BINARY)
 	msgfmt --xml -d po \
 		--template $(APPSTREAMFILE) \
 		-o $(DESTDIR)$(PREFIX)/share/metainfo/$(APPSTREAMFILE)
-	mkdir -p $(DESTDIR)$(PREFIX)/libexec/cockpit-slurm
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	install -m 755 $(APP_BINARY) $(DESTDIR)$(PREFIX)/bin/
 	mkdir -p $(DESTDIR)/etc/systemd/system
@@ -124,7 +122,6 @@ install: $(DIST_TEST) po/LINGUAS $(APP_BINARY)
 uninstall:
 	rm -rf $(DESTDIR)$(PREFIX)/share/cockpit/$(PACKAGE_NAME)
 	rm -f $(DESTDIR)$(PREFIX)/share/metainfo/$(APPSTREAMFILE)
-	rm -rf $(DESTDIR)$(PREFIX)/libexec/cockpit-slurm
 	rm -f $(DESTDIR)$(PREFIX)/bin/cockpit-slurm
 	rm -f $(DESTDIR)/etc/systemd/system/cockpit-slurm.service
 
@@ -132,10 +129,8 @@ uninstall:
 devel-install: $(DIST_TEST) $(APP_BINARY)
 	mkdir -p $(DEVEL_COCKPIT_DIR)
 	ln -snf $(CURDIR)/dist $(DEVEL_COCKPIT_DIR)/$(PACKAGE_NAME)
-	mkdir -p $(DEVEL_LIBEXECDIR)
-	install -m 755 $(APP_BINARY) $(DEVEL_LIBEXECDIR)/
 	mkdir -p $(DEVEL_BINDIR)
-	ln -snf $(DEVEL_LIBEXECDIR)/cockpit-slurm $(DEVEL_BINDIR)/cockpit-slurm
+	install -m 755 $(APP_BINARY) $(DEVEL_BINDIR)/cockpit-slurm
 	mkdir -p $(DEVEL_ENV_DIR)
 	printf 'COCKPIT_SLURM_SOCKET_PATH=/run/user/%s/cockpit-slurm/cockpit-slurm.sock\n' "$$(id -u)" > $(DEVEL_ENV_FILE)
 
@@ -144,9 +139,8 @@ devel-install: $(DIST_TEST) $(APP_BINARY)
 devel-uninstall:
 	rm -f $(DEVEL_COCKPIT_DIR)/$(PACKAGE_NAME)
 	rm -f $(DEVEL_BINDIR)/cockpit-slurm
-	rm -rf $(DEVEL_LIBEXECDIR)
 	rm -f $(DEVEL_ENV_FILE)
-	rmdir --ignore-fail-on-non-empty $(DEVEL_COCKPIT_DIR)
+	rmdir --ignore-fail-on-non-empty $(DEVEL_COCKPIT_DIR) 2>/dev/null || true
 
 print-version:
 	@echo "$(VERSION)"

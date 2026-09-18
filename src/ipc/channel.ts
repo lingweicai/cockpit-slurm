@@ -33,21 +33,21 @@ export function createChannel(socketPath?: string): IpcChannel {
     }
   };
 
-  channel.onmessage = (message: unknown) => {
+  channel.addEventListener('message', (_event: unknown, message: unknown) => {
     notifyMessage(message);
-  };
+  });
 
-  channel.onerror = (error: unknown) => {
-    if (handlers.onerror) {
-      handlers.onerror(error instanceof Error ? error : new Error(String(error)));
+  channel.addEventListener('close', (_event: unknown, details: unknown) => {
+    if (handlers.onerror && details && typeof details === 'object' && 'problem' in details) {
+      const problem = (details as { problem?: unknown }).problem;
+      if (problem) {
+        handlers.onerror(new Error(String(problem)));
+      }
     }
-  };
-
-  channel.onclose = () => {
     if (handlers.onclose) {
       handlers.onclose();
     }
-  };
+  });
 
   return {
     send(data: Uint8Array | ArrayBuffer | number[]) {
