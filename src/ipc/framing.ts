@@ -1,4 +1,4 @@
-import { MAX_FRAME_SIZE, PROTOCOL_NAME, PROTOCOL_VERSION, type ApplicationEnvelope } from './types';
+import { MAX_FRAME_SIZE, PROTOCOL_NAME, PROTOCOL_VERSION, type ApplicationEnvelope } from './types.ts';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();

@@ -1,6 +1,6 @@
-import { createChannel } from './channel';
-import { encodeFrame, FrameDecoder, validateEnvelope } from './framing';
-import { PROTOCOL_NAME, PROTOCOL_VERSION, type ApplicationEnvelope, type IpcChannel } from './types';
+import { createChannel } from './channel.ts';
+import { encodeFrame, FrameDecoder, validateEnvelope } from './framing.ts';
+import { PROTOCOL_NAME, PROTOCOL_VERSION, type ApplicationEnvelope, type IpcChannel } from './types.ts';
 
 function generateMessageId(): string {
   return `MSG-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
@@ -10,6 +10,7 @@ export class IpcClient {
   private readonly channel: IpcChannel;
   private readonly decoder = new FrameDecoder();
   private readonly pending = new Map<string, { resolve: (value: ApplicationEnvelope) => void; reject: (reason: Error) => void }>();
+  private closed = false;
 
   constructor(channel: IpcChannel = createChannel()) {
     this.channel = channel;
@@ -33,12 +34,13 @@ export class IpcClient {
     };
 
     this.channel.onclose = () => {
+      this.closed = true;
       this.rejectAll(new Error('connection closed'));
     };
   }
 
   send(request: Partial<ApplicationEnvelope> & { type: string }): Promise<ApplicationEnvelope> {
-    if (this.channel === null) {
+    if (this.closed) {
       return Promise.reject(new Error('client is closed'));
     }
 
@@ -67,6 +69,10 @@ export class IpcClient {
   }
 
   close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
     this.channel.close();
     this.rejectAll(new Error('connection closed'));
   }

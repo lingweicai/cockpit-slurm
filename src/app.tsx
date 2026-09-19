@@ -24,6 +24,9 @@ export const Application = () => {
     const [ipcStatus, setIpcStatus] = useState('Ready');
     const [ipcResponse, setIpcResponse] = useState('Waiting for ping');
     const [ipcError, setIpcError] = useState('');
+    const [connectionStatus, setConnectionStatus] = useState('Idle');
+    const [lastMessageId, setLastMessageId] = useState('None');
+    const [roundTripMs, setRoundTripMs] = useState<number | null>(null);
     const [debugLog, setDebugLog] = useState<string[]>([]);
 
     const appendDebugLog = useCallback((entry: string) => {
@@ -55,11 +58,16 @@ export const Application = () => {
         setIpcStatus('Sending ping…');
         setIpcError('');
         setIpcResponse('');
+        setConnectionStatus('Connecting');
+        setRoundTripMs(null);
 
         try {
             await validateSocket(path);
             const client = createIpcClient(createChannel(path));
             const requestId = `DEBUG-${Date.now()}`;
+            const startedAt = performance.now();
+            setConnectionStatus('Connected');
+            setLastMessageId(requestId);
             appendDebugLog(`request ${requestId}`);
             const response = await Promise.race([
                 client.send({ type: 'ping', messageId: requestId }),
@@ -69,11 +77,14 @@ export const Application = () => {
             appendDebugLog(`response ${response.messageId} type=${response.type}`);
             setIpcStatus('Pong received');
             setIpcResponse(JSON.stringify(response));
+            setRoundTripMs(Math.round((performance.now() - startedAt) * 100) / 100);
+            setConnectionStatus('Closed after round trip');
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             appendDebugLog(`ping-failed ${message}`);
             setIpcStatus('Ping failed');
             setIpcError(message);
+            setConnectionStatus('Connection failed');
         }
     }, [appendDebugLog, validateSocket]);
 
@@ -115,6 +126,11 @@ export const Application = () => {
                     >
                         { ipcError || ipcResponse }
                     </Alert>
+                    <div style={{ marginTop: '1rem' }}>
+                        <div>Connection: { connectionStatus }</div>
+                        <div>Message ID: { lastMessageId }</div>
+                        <div>Round trip: { roundTripMs === null ? 'Not measured' : `${roundTripMs} ms` }</div>
+                    </div>
                     <Card style={{ marginTop: '1rem' }}>
                         <CardTitle>Debug log</CardTitle>
                         <CardBody>

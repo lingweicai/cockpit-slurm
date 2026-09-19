@@ -1,4 +1,4 @@
-import { type IpcChannel, type MessageHandler } from './types';
+import { type IpcChannel, type MessageHandler } from './types.ts';
 
 export function resolveSocketPath(socketPath?: string): string {
   const windowSocket = typeof window !== 'undefined'

@@ -3,6 +3,7 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -150,6 +151,81 @@ func TestServerDispatchesHelloOverSocket(t *testing.T) {
 
 	if server.connections.Count() != 1 {
 		t.Fatalf("active connection count = %d, want 1", server.connections.Count())
+	}
+
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close() returned error: %v", err)
+	}
+	select {
+	case err := <-serveErr:
+		if err != nil {
+			t.Fatalf("Serve() returned error after close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve() did not exit after Close()")
+	}
+}
+
+func TestServerHandlesConcurrentPingRequests(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "cockpit-slurm.sock")
+	server := NewServer(socketPath)
+	if err := server.Listen(); err != nil {
+		t.Fatalf("Listen() returned error: %v", err)
+	}
+	defer func() {
+		_ = server.Close()
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- server.Serve(ctx)
+	}()
+
+	const clientCount = 4
+	results := make(chan error, clientCount)
+	for client := 0; client < clientCount; client++ {
+		go func(client int) {
+			conn, err := net.Dial("unix", socketPath)
+			if err != nil {
+				results <- fmt.Errorf("client %d dial: %w", client, err)
+				return
+			}
+			defer conn.Close()
+
+			messageID := fmt.Sprintf("PING-%d", client)
+			if err := protocol.NewEncoder(conn).Encode(protocol.NewEnvelope(messageID, protocol.MessagePing, json.RawMessage(`{}`))); err != nil {
+				results <- fmt.Errorf("client %d encode: %w", client, err)
+				return
+			}
+
+			response, err := protocol.NewDecoder(conn).Decode()
+			if err != nil {
+				results <- fmt.Errorf("client %d decode: %w", client, err)
+				return
+			}
+			if response.Type != protocol.MessagePong {
+				results <- fmt.Errorf("client %d response type = %q, want %q", client, response.Type, protocol.MessagePong)
+				return
+			}
+			if response.MessageID != messageID {
+				results <- fmt.Errorf("client %d message ID = %q, want %q", client, response.MessageID, messageID)
+				return
+			}
+			results <- nil
+		}(client)
+	}
+
+	for client := 0; client < clientCount; client++ {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for concurrent ping responses")
+		}
 	}
 
 	if err := server.Close(); err != nil {

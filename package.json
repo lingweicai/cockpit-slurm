@@ -12,6 +12,7 @@
   "scripts": {
     "watch": "ESBUILD_WATCH='true' ./build.js",
     "build": "./build.js",
+    "test:ipc": "node --experimental-strip-types src/ipc/framing.test.ts && node --experimental-strip-types src/ipc/client.test.ts",
     "eslint": "eslint src/",
     "eslint:fix": "eslint --fix src/",
     "stylelint": "stylelint src/*.{css,scss}",
