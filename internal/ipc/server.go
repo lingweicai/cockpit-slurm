@@ -47,13 +47,21 @@ type Server struct {
 
 // NewServer creates an IPC server.
 func NewServer(socketPath string) *Server {
+	return NewServerWithDispatcher(socketPath, dispatcher.NewDispatcher())
+}
+
+// NewServerWithDispatcher creates an IPC server using the supplied message dispatcher.
+func NewServerWithDispatcher(socketPath string, messageDispatcher *dispatcher.MessageDispatcher) *Server {
 	if socketPath == "" {
 		socketPath = socketPathFromEnv()
+	}
+	if messageDispatcher == nil {
+		messageDispatcher = dispatcher.NewDispatcher()
 	}
 
 	return &Server{
 		socketPath: socketPath,
-		dispatcher: dispatcher.NewDispatcher(),
+		dispatcher: messageDispatcher,
 		connections: connection.NewConnectionManager(),
 	}
 }

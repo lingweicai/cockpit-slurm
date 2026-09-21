@@ -92,6 +92,24 @@ async function run(): Promise<void> {
   secondChannel.respond(response('REQUEST-3'));
   assertEqual((await independentRequest).messageId, 'REQUEST-3', 'separate clients should keep independent request state');
 
+  const queryChannel = new FakeChannel();
+  const queryClient = new IpcClient(queryChannel);
+  const queryRequest = queryClient.send({
+    type: 'query',
+    messageId: 'QUERY-1',
+    payload: { resource: 'nodes' },
+  });
+  queryChannel.respond({
+    protocol: 'cockpit-slurm',
+    version: '1.0',
+    messageId: 'QUERY-1',
+    type: 'query-response',
+    payload: { resource: 'nodes', generation: 1, nodes: [{ name: 'node001', state: 'IDLE' }] },
+  });
+  const queryResponse = await queryRequest;
+  assertEqual(queryResponse.type, 'query-response', 'query responses should preserve the query-response type');
+  assertEqual((queryResponse.payload as { resource: string }).resource, 'nodes', 'query responses should identify the resource');
+
   console.log('ipc client checks passed');
 }
 

@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 
 	"github.com/lingweicai/cockpit-slurm/internal/protocol"
+	"github.com/lingweicai/cockpit-slurm/internal/resource"
+	"github.com/lingweicai/cockpit-slurm/internal/service"
 )
 
 // Handler processes one message type and returns a response envelope.
@@ -27,16 +29,34 @@ type MessageDispatcher struct {
 
 // NewDispatcher creates a dispatcher with the Phase 1D handlers.
 func NewDispatcher() *MessageDispatcher {
+	return NewDispatcherWithCache(resource.NewNodeCache())
+}
+
+// NewDispatcherWithCache creates a dispatcher backed by the supplied Node cache.
+func NewDispatcherWithCache(cache *resource.NodeCache) *MessageDispatcher {
+	if cache == nil {
+		cache = resource.NewNodeCache()
+	}
+
 	d := &MessageDispatcher{
 		handlers: make(map[protocol.MessageType]Handler),
 	}
 	d.register(protocol.MessageHello, helloHandler{dispatcher: d})
 	d.register(protocol.MessagePing, pingHandler{dispatcher: d})
+	d.register(protocol.MessageQuery, service.NewQueryHandler(service.NewNodeQueryService(cache)))
 	return d
 }
 
 func (d *MessageDispatcher) register(t protocol.MessageType, h Handler) {
 	d.handlers[t] = h
+}
+
+func (d *MessageDispatcher) Register(t protocol.MessageType, h Handler) error {
+	if h == nil {
+		return fmt.Errorf("handler is nil")
+	}
+	d.handlers[t] = h
+	return nil
 }
 
 // Dispatch routes an inbound message to a registered handler.

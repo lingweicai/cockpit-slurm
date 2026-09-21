@@ -13,10 +13,13 @@ import { Page } from '@patternfly/react-core/dist/esm/components/Page/index.js';
 import cockpit from 'cockpit';
 import { createIpcClient } from './ipc/client';
 import { createChannel, resolveSocketPath } from './ipc/channel';
+import { NodeProvider, useNodes } from './node-provider';
+import { NodeTable } from './node-table';
 
 const _ = cockpit.gettext;
 
-export const Application = () => {
+const ApplicationContent = () => {
+    const { nodes, generation, loading: nodesLoading, error: nodesError, refresh: refreshNodes } = useNodes();
     const [hostname, setHostname] = useState(_("Unknown"));
     const [socketPath, setSocketPath] = useState(resolveSocketPath());
     const [socketStatus, setSocketStatus] = useState('Checking socket…');
@@ -118,6 +121,7 @@ export const Application = () => {
                     </Alert>
                     <div style={{ marginTop: '1rem' }}>
                         <Button variant="primary" onClick={ runPingPong }>Run ping/pong round trip</Button>
+                        <Button variant="secondary" onClick={ () => void refreshNodes() } style={{ marginLeft: '0.5rem' }}>Refresh nodes</Button>
                     </div>
                     <Alert
                     variant={ ipcError ? 'danger' : 'success' }
@@ -131,6 +135,19 @@ export const Application = () => {
                         <div>Message ID: { lastMessageId }</div>
                         <div>Round trip: { roundTripMs === null ? 'Not measured' : `${roundTripMs} ms` }</div>
                     </div>
+                    <Alert
+                    variant={ nodesError ? 'danger' : nodesLoading ? 'info' : 'success' }
+                    title={ nodesError ? 'Node query failed' : nodesLoading ? 'Loading nodes' : `Nodes loaded (generation ${generation})` }
+                    style={{ marginTop: '1rem' }}
+                    >
+                        { nodesError ? nodesError.message : `${nodes.length} node(s) returned` }
+                    </Alert>
+                    <Card style={{ marginTop: '1rem' }}>
+                        <CardTitle>Nodes</CardTitle>
+                        <CardBody>
+                            <NodeTable />
+                        </CardBody>
+                    </Card>
                     <Card style={{ marginTop: '1rem' }}>
                         <CardTitle>Debug log</CardTitle>
                         <CardBody>
@@ -142,5 +159,14 @@ export const Application = () => {
                 </CardBody>
             </Card>
         </Page>
+    );
+};
+
+export const Application = () => {
+    const createNodeClient = useCallback(() => createIpcClient(createChannel(resolveSocketPath())), []);
+    return (
+        <NodeProvider createClient={ createNodeClient }>
+            <ApplicationContent />
+        </NodeProvider>
     );
 };
