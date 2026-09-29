@@ -30,6 +30,49 @@ func TestNodeCacheReplaceSnapshotAndGeneration(t *testing.T) {
 	}
 }
 
+func TestNodeCacheDoesNotAdvanceForSemanticallyUnchangedSnapshot(t *testing.T) {
+	cache := NewNodeCache()
+	first := NewNode("node001", 0)
+	first.Status.StateFlags = []string{"DRAIN", "CLOUD"}
+	cache.ReplaceSnapshot([]Node{first})
+
+	unchanged := NewNode("node001", 99)
+	unchanged.Status.StateFlags = []string{"CLOUD", "DRAIN"}
+	changed, generation := cache.ReplaceSnapshotIfChanged([]Node{unchanged})
+	if changed {
+		t.Fatal("unchanged snapshot was reported as changed")
+	}
+	if generation != 1 {
+		t.Fatalf("generation = %d, want 1", generation)
+	}
+	if cache.Generation() != 1 {
+		t.Fatalf("cache generation = %d, want 1", cache.Generation())
+	}
+}
+
+func TestNodeCacheAdvancesOnceForChangedSnapshot(t *testing.T) {
+	cache := NewNodeCache()
+	cache.ReplaceSnapshot([]Node{NewNode("node001", 0)})
+
+	changedNode := NewNode("node001", 0)
+	changedNode.Status.State = "DOWN"
+	changed, generation := cache.ReplaceSnapshotIfChanged([]Node{changedNode})
+	if !changed {
+		t.Fatal("changed snapshot was reported as unchanged")
+	}
+	if generation != 2 {
+		t.Fatalf("generation = %d, want 2", generation)
+	}
+
+	changed, generation = cache.ReplaceSnapshotIfChanged([]Node{changedNode})
+	if changed {
+		t.Fatal("repeated snapshot was reported as changed")
+	}
+	if generation != 2 {
+		t.Fatalf("generation = %d after repeated snapshot, want 2", generation)
+	}
+}
+
 func TestNodeCachePreservesPreviousSnapshotOnReplaceFailure(t *testing.T) {
 	cache := NewNodeCache()
 	cache.ReplaceSnapshot([]Node{NewNode("node001", 0)})

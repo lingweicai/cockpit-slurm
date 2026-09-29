@@ -110,6 +110,22 @@ async function run(): Promise<void> {
   assertEqual(queryResponse.type, 'query-response', 'query responses should preserve the query-response type');
   assertEqual((queryResponse.payload as { resource: string }).resource, 'nodes', 'query responses should identify the resource');
 
+  const eventChannel = new FakeChannel();
+  const eventClient = new IpcClient(eventChannel);
+  let receivedEvent: ApplicationEnvelope | null = null;
+  const removeEventHandler = eventClient.onEvent('sub-001', (event) => {
+    receivedEvent = event;
+  });
+  eventChannel.respond({
+    protocol: 'cockpit-slurm',
+    version: '1.0',
+    messageId: 'EVENT-1',
+    type: 'event',
+    payload: { subscriptionId: 'sub-001', resource: 'nodes', event: 'updated', generation: 2, eventSequence: 1, node: {} },
+  });
+  assertEqual((receivedEvent as ApplicationEnvelope | null)?.messageId, 'EVENT-1', 'events should route independently of pending requests');
+  removeEventHandler();
+
   console.log('ipc client checks passed');
 }
 

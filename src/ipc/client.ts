@@ -10,6 +10,7 @@ export class IpcClient {
   private readonly channel: IpcChannel;
   private readonly decoder = new FrameDecoder();
   private readonly pending = new Map<string, { resolve: (value: ApplicationEnvelope) => void; reject: (reason: Error) => void }>();
+  private readonly eventHandlers = new Map<string, Set<(event: ApplicationEnvelope) => void>>();
   private closed = false;
 
   constructor(channel: IpcChannel = createChannel()) {
@@ -17,6 +18,10 @@ export class IpcClient {
     this.channel.onmessage = (chunk) => {
       try {
         for (const frame of this.decoder.push(chunk)) {
+          if (frame.type === 'event') {
+            this.routeEvent(frame);
+            continue;
+          }
           const pending = this.pending.get(frame.messageId);
           if (!pending) {
             continue;
@@ -74,7 +79,27 @@ export class IpcClient {
     }
     this.closed = true;
     this.channel.close();
+    this.eventHandlers.clear();
     this.rejectAll(new Error('connection closed'));
+  }
+
+  onEvent(subscriptionId: string, handler: (event: ApplicationEnvelope) => void): () => void {
+    if (!subscriptionId) {
+      throw new Error('subscription ID is required');
+    }
+    const handlers = this.eventHandlers.get(subscriptionId) ?? new Set();
+    handlers.add(handler);
+    this.eventHandlers.set(subscriptionId, handlers);
+    return () => {
+      const current = this.eventHandlers.get(subscriptionId);
+      if (!current) {
+        return;
+      }
+      current.delete(handler);
+      if (current.size === 0) {
+        this.eventHandlers.delete(subscriptionId);
+      }
+    };
   }
 
   private rejectAll(error: Error): void {
@@ -86,6 +111,20 @@ export class IpcClient {
     this.pending.clear();
     for (const request of pending) {
       request.reject(error);
+    }
+  }
+
+  private routeEvent(event: ApplicationEnvelope): void {
+    const payload = event.payload;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return;
+    }
+    const subscriptionId = (payload as { subscriptionId?: unknown }).subscriptionId;
+    if (typeof subscriptionId !== 'string') {
+      return;
+    }
+    for (const handler of this.eventHandlers.get(subscriptionId) ?? []) {
+      handler(event);
     }
   }
 }
