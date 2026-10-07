@@ -1,4 +1,4 @@
-import { MAX_FRAME_SIZE, PROTOCOL_NAME, PROTOCOL_VERSION, type ApplicationEnvelope } from './types.ts';
+import { MAX_FRAME_SIZE, PROTOCOL_NAME, PROTOCOL_VERSION, type Envelope } from './types.ts';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -19,7 +19,7 @@ function asUint8Array(chunk: Uint8Array | ArrayBuffer | number[] | string): Uint
   return new Uint8Array(chunk);
 }
 
-export function validateEnvelope(value: unknown): value is ApplicationEnvelope {
+export function validateEnvelope(value: unknown): value is Envelope {
   if (typeof value !== 'object' || value === null) {
     return false;
   }
@@ -36,7 +36,7 @@ export function validateEnvelope(value: unknown): value is ApplicationEnvelope {
   );
 }
 
-export function encodeFrame(message: ApplicationEnvelope): Uint8Array {
+export function encodeFrame(message: Envelope): Uint8Array {
   const json = JSON.stringify(message);
   if (json === undefined) {
     throw new Error('failed to encode message as JSON');
@@ -61,14 +61,14 @@ export function encodeFrame(message: ApplicationEnvelope): Uint8Array {
 export class FrameDecoder {
   private buffer = new Uint8Array(0);
 
-  push(chunk: Uint8Array | ArrayBuffer | number[] | string): ApplicationEnvelope[] {
+  push(chunk: Uint8Array | ArrayBuffer | number[] | string): Envelope[] {
     const incoming = asUint8Array(chunk);
     const data = new Uint8Array(this.buffer.length + incoming.length);
     data.set(this.buffer, 0);
     data.set(incoming, this.buffer.length);
     this.buffer = data;
 
-    const frames: ApplicationEnvelope[] = [];
+    const frames: Envelope[] = [];
 
     while (this.buffer.length >= 4) {
       const view = new DataView(this.buffer.buffer, this.buffer.byteOffset, this.buffer.byteLength);
@@ -108,7 +108,7 @@ export class FrameDecoder {
   }
 }
 
-export function decodeFrameChunk(chunk: Uint8Array | ArrayBuffer | number[] | string): ApplicationEnvelope[] {
+export function decodeFrameChunk(chunk: Uint8Array | ArrayBuffer | number[] | string): Envelope[] {
   const decoder = new FrameDecoder();
   return decoder.push(chunk);
 }

@@ -10,7 +10,7 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export interface ApplicationEnvelope {
+export interface Envelope {
   protocol: string;
   version: string;
   messageId: string;

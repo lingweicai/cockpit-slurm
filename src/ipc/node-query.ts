@@ -1,5 +1,5 @@
 import { IpcClient } from './client.ts';
-import { type ApplicationEnvelope, type IpcChannel } from './types.ts';
+import { type Envelope, type IpcChannel } from './types.ts';
 
 export interface NodeResourceSnapshot {
   resource: string;
@@ -14,7 +14,7 @@ export interface NodeResourceSnapshot {
 }
 
 export async function queryNodes(client: IpcClient): Promise<NodeResourceSnapshot> {
-  const response: ApplicationEnvelope = await client.send({
+  const response: Envelope = await client.send({
     type: 'query',
     messageId: `query-nodes-${Date.now()}`,
     payload: { resource: 'nodes' },

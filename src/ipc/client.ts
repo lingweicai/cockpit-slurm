@@ -1,6 +1,6 @@
 import { createChannel } from './channel.ts';
 import { encodeFrame, FrameDecoder, validateEnvelope } from './framing.ts';
-import { PROTOCOL_NAME, PROTOCOL_VERSION, type ApplicationEnvelope, type IpcChannel } from './types.ts';
+import { PROTOCOL_NAME, PROTOCOL_VERSION, type Envelope, type IpcChannel } from './types.ts';
 
 function generateMessageId(): string {
   return `MSG-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
@@ -9,7 +9,7 @@ function generateMessageId(): string {
 export class IpcClient {
   private readonly channel: IpcChannel;
   private readonly decoder = new FrameDecoder();
-  private readonly pending = new Map<string, { resolve: (value: ApplicationEnvelope) => void; reject: (reason: Error) => void }>();
+  private readonly pending = new Map<string, { resolve: (value: Envelope) => void; reject: (reason: Error) => void }>();
   private closed = false;
 
   constructor(channel: IpcChannel = createChannel()) {
@@ -39,12 +39,12 @@ export class IpcClient {
     };
   }
 
-  send(request: Partial<ApplicationEnvelope> & { type: string }): Promise<ApplicationEnvelope> {
+  send(request: Partial<Envelope> & { type: string }): Promise<Envelope> {
     if (this.closed) {
       return Promise.reject(new Error('client is closed'));
     }
 
-    const message: ApplicationEnvelope = {
+    const message: Envelope = {
       protocol: request.protocol ?? PROTOCOL_NAME,
       version: request.version ?? PROTOCOL_VERSION,
       messageId: request.messageId ?? generateMessageId(),
@@ -57,7 +57,7 @@ export class IpcClient {
       return Promise.reject(new Error('invalid request envelope'));
     }
 
-    return new Promise<ApplicationEnvelope>((resolve, reject) => {
+    return new Promise<Envelope>((resolve, reject) => {
       this.pending.set(message.messageId, { resolve, reject });
       try {
         this.channel.send(encodeFrame(message));

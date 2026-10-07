@@ -1,6 +1,6 @@
 import { IpcClient } from './client.ts';
 import { decodeFrameChunk, encodeFrame } from './framing.ts';
-import { type ApplicationEnvelope, type IpcChannel, type MessageHandler } from './types.ts';
+import { type Envelope, type IpcChannel, type MessageHandler } from './types.ts';
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
@@ -36,7 +36,7 @@ class FakeChannel implements IpcChannel {
     this.closed = true;
   }
 
-  respond(message: ApplicationEnvelope): void {
+  respond(message: Envelope): void {
     this.onmessage?.(encodeFrame(message));
   }
 
@@ -50,7 +50,7 @@ class FakeChannel implements IpcChannel {
   }
 }
 
-function response(messageId: string): ApplicationEnvelope {
+function response(messageId: string): Envelope {
   return {
     protocol: 'cockpit-slurm',
     version: '1.0',
