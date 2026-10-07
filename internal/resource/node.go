@@ -14,7 +14,7 @@ type Node struct {
 	Status   NodeStatus   `json:"status"`
 }
 
-func NewNode(name string, generation int64) Node {
+func NewNode(name string, generation uint64) Node {
 	return Node{
 		Metadata: NodeMetadata{
 			Name:       name,
@@ -31,17 +31,17 @@ func NewNode(name string, generation int64) Node {
 }
 
 func (n Node) Identity() string {
-	if n.Metadata.Name != "" {
-		return n.Metadata.Name
+	if n.Spec.NodeName != "" {
+		return n.Spec.NodeName
 	}
-	return n.Spec.NodeName
+	return n.Metadata.Name
 }
 
 // NodeMetadata identifies a resource within the backend cache.
 type NodeMetadata struct {
 	Name       string    `json:"name"`
 	Kind       string    `json:"kind"`
-	Generation int64     `json:"generation"`
+	Generation uint64    `json:"generation"`
 	ObservedAt time.Time `json:"observedAt"`
 	Source     string    `json:"source"`
 }

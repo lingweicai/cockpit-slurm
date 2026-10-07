@@ -4,25 +4,73 @@ import "sync"
 
 // NodeCache stores the authoritative in-memory snapshot for Nodes.
 type NodeCache struct {
-	mu       sync.RWMutex
-	generation int64
-	nodes    map[string]Node
+	mu         sync.RWMutex
+	generation uint64
+	nodes      map[string]Node
 }
 
 func NewNodeCache() *NodeCache {
 	return &NodeCache{nodes: make(map[string]Node)}
 }
 
-func (c *NodeCache) ReplaceSnapshot(nodes []Node) {
+// ReplaceSnapshot commits a complete Node snapshot and returns the changes
+// committed at the new generation. Unchanged snapshots do not advance the
+// generation and return changed=false.
+func (c *NodeCache) ReplaceSnapshot(nodes []Node) (batch NodeChangeBatch, changed bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	updated := make(map[string]Node, len(nodes))
+	incoming := make(map[string]Node, len(nodes))
 	for _, n := range nodes {
-		updated[n.Identity()] = n
+		incoming[n.Identity()] = n
 	}
-	c.nodes = updated
+
+	var changes []NodeChange
+	for identity, node := range incoming {
+		old, exists := c.nodes[identity]
+		if !exists {
+			changes = append(changes, NodeChange{Kind: NodeAdded, Node: node})
+			continue
+		}
+		if !sameNodeState(old, node) {
+			changes = append(changes, NodeChange{Kind: NodeUpdated, Node: node})
+		}
+	}
+	for identity, node := range c.nodes {
+		if _, exists := incoming[identity]; !exists {
+			changes = append(changes, NodeChange{Kind: NodeRemoved, Node: node})
+		}
+	}
+
+	if len(changes) == 0 {
+		return NodeChangeBatch{}, false
+	}
+
 	c.generation++
+
+	updated := make(map[string]Node, len(incoming))
+	for identity, node := range incoming {
+		if old, exists := c.nodes[identity]; exists && sameNodeState(old, node) {
+			updated[identity] = old
+			continue
+		}
+		node.Metadata.Generation = c.generation
+		updated[identity] = node
+	}
+	for i := range changes {
+		if changes[i].Kind != NodeRemoved {
+			changes[i].Node.Metadata.Generation = c.generation
+		}
+	}
+	sortNodeChanges(changes)
+	c.nodes = updated
+
+	return NodeChangeBatch{
+		Resource:   "node",
+		Event:      "changes",
+		Generation: c.generation,
+		Changes:    changes,
+	}, true
 }
 
 func (c *NodeCache) Snapshot() Snapshot {
@@ -44,7 +92,7 @@ func (c *NodeCache) Get(name string) (Node, bool) {
 	return n, ok
 }
 
-func (c *NodeCache) Generation() int64 {
+func (c *NodeCache) Generation() uint64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.generation
