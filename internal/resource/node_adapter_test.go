@@ -20,7 +20,7 @@ func TestSlurmNodeAdapterMapsGeneratedNodes(t *testing.T) {
 				"cpu_load":     27,
 				"real_memory":  256000,
 				"alloc_memory": 8192,
-				"free_mem": map[string]any{"number": 247808, "set": true},
+				"free_mem":     map[string]any{"number": 247808, "set": true},
 				"reason":       "maintenance",
 				"state":        []string{"IDLE", "POWER_UP"},
 			},
@@ -67,6 +67,24 @@ func TestSlurmNodeAdapterHandlesCommandFailure(t *testing.T) {
 	_, err := adapter.ListNodes(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "scontrol show nodes --json failed") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSlurmNodeAdapterRejectsIncompleteResponses(t *testing.T) {
+	for _, payload := range []string{
+		`{}`,
+		`{"nodes":null}`,
+		`{"nodes":{}}`,
+		`{"nodes":[],"errors":[{"error":"controller unavailable"}]}`,
+	} {
+		t.Run(payload, func(t *testing.T) {
+			adapter := &slurmNodeAdapter{execCommandContext: func(context.Context, string, ...string) ([]byte, error) {
+				return []byte(payload), nil
+			}}
+			if _, err := adapter.ListNodes(context.Background()); err == nil {
+				t.Fatalf("ListNodes accepted incomplete response %s", payload)
+			}
+		})
 	}
 }
 

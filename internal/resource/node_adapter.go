@@ -1,8 +1,10 @@
 package resource
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -43,9 +45,25 @@ func (a *slurmNodeAdapter) ListNodes(ctx context.Context) ([]Node, error) {
 		return nil, fmt.Errorf("invoke scontrol show nodes --json: %w", err)
 	}
 
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal(out, &shape); err != nil {
+		return nil, fmt.Errorf("decode scontrol nodes JSON: %w", err)
+	}
+	rawNodes, exists := shape["nodes"]
+	if !exists {
+		return nil, errors.New(`decode scontrol nodes JSON: missing "nodes" field`)
+	}
+	trimmed := bytes.TrimSpace(rawNodes)
+	if len(trimmed) == 0 || trimmed[0] != '[' {
+		return nil, errors.New(`decode scontrol nodes JSON: "nodes" must be an array`)
+	}
+
 	resp := models.V0043OpenapiNodesResp{}
 	if err := json.Unmarshal(out, &resp); err != nil {
 		return nil, fmt.Errorf("decode scontrol nodes JSON: %w", err)
+	}
+	if resp.Errors != nil && len(*resp.Errors) > 0 {
+		return nil, errors.New("scontrol nodes response contains errors")
 	}
 
 	nodes := make([]Node, 0, len(resp.Nodes))
