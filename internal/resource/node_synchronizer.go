@@ -69,10 +69,7 @@ func (s *NodeSynchronizer) Refresh(ctx context.Context) error {
 		return fmt.Errorf("validate Slurm node snapshot: %w", err)
 	}
 
-	batch, changed := s.cache.ReplaceSnapshot(nodes)
-	if changed && s.publisher != nil {
-		s.publisher.Publish(batch)
-	}
+	s.cache.ReplaceSnapshotAndPublish(nodes, s.publisher)
 	return nil
 }
 

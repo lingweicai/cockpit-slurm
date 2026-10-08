@@ -16,6 +16,7 @@ import (
 	"github.com/lingweicai/cockpit-slurm/internal/connection"
 	"github.com/lingweicai/cockpit-slurm/internal/dispatcher"
 	"github.com/lingweicai/cockpit-slurm/internal/protocol"
+	"github.com/lingweicai/cockpit-slurm/internal/stream"
 )
 
 const DefaultSocketPath = "/run/cockpit-slurm/cockpit-slurm.sock"
@@ -33,16 +34,25 @@ var ErrSocketInUse = errors.New("unix socket is already in use")
 
 // Server provides a Unix-domain socket listener for cockpit-slurm.
 type Server struct {
-	socketPath string
-	listener   net.Listener
-	dispatcher *dispatcher.MessageDispatcher
+	socketPath  string
+	listener    net.Listener
+	dispatcher  *dispatcher.MessageDispatcher
 	connections connection.ConnectionManager
+	nodeStreams *stream.NodeStreamRegistry
 
 	wg sync.WaitGroup
 
 	mu     sync.Mutex
 	closed bool
 	active map[net.Conn]struct{}
+}
+
+// NewServerWithNodeStreams creates a Unix socket server that streams Node
+// snapshots and changes to each accepted connection.
+func NewServerWithNodeStreams(socketPath string, registry *stream.NodeStreamRegistry) *Server {
+	server := NewServerWithDispatcher(socketPath, nil)
+	server.nodeStreams = registry
+	return server
 }
 
 // NewServer creates an IPC server.
@@ -60,8 +70,8 @@ func NewServerWithDispatcher(socketPath string, messageDispatcher *dispatcher.Me
 	}
 
 	return &Server{
-		socketPath: socketPath,
-		dispatcher: messageDispatcher,
+		socketPath:  socketPath,
+		dispatcher:  messageDispatcher,
 		connections: connection.NewConnectionManager(),
 	}
 }
@@ -150,6 +160,14 @@ func (s *Server) Serve(ctx context.Context) error {
 			defer s.untrackConn(conn)
 			defer conn.Close()
 
+			if s.nodeStreams != nil {
+				nodeStream := s.nodeStreams.Register(conn)
+				if nodeStream != nil {
+					_ = nodeStream.Wait(context.Background())
+				}
+				return
+			}
+
 			connState, err := connection.NewConnection(conn)
 			if err != nil {
 				_ = conn.Close()
@@ -225,6 +243,9 @@ func (s *Server) Close() error {
 
 	for _, conn := range active {
 		_ = conn.Close()
+	}
+	if s.nodeStreams != nil {
+		s.nodeStreams.CloseAll()
 	}
 
 	s.connections.CloseAll()

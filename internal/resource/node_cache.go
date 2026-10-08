@@ -4,9 +4,10 @@ import "sync"
 
 // NodeCache stores the authoritative in-memory snapshot for Nodes.
 type NodeCache struct {
-	mu         sync.RWMutex
-	generation uint64
-	nodes      map[string]Node
+	publicationMu sync.Mutex
+	mu            sync.RWMutex
+	generation    uint64
+	nodes         map[string]Node
 }
 
 func NewNodeCache() *NodeCache {
@@ -17,6 +18,34 @@ func NewNodeCache() *NodeCache {
 // committed at the new generation. Unchanged snapshots do not advance the
 // generation and return changed=false.
 func (c *NodeCache) ReplaceSnapshot(nodes []Node) (batch NodeChangeBatch, changed bool) {
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+
+	return c.replaceSnapshot(nodes)
+}
+
+// ReplaceSnapshotAndPublish keeps cache commits and change publication ordered
+// with stream baseline registration.
+func (c *NodeCache) ReplaceSnapshotAndPublish(nodes []Node, publisher NodeChangePublisher) (batch NodeChangeBatch, changed bool) {
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+
+	batch, changed = c.replaceSnapshot(nodes)
+	if changed && publisher != nil {
+		publisher.Publish(batch)
+	}
+	return batch, changed
+}
+
+// WithSnapshotBoundary captures a snapshot while excluding cache commits and
+// publication until the callback has established a stream baseline.
+func (c *NodeCache) WithSnapshotBoundary(register func(Snapshot)) {
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+	register(c.Snapshot())
+}
+
+func (c *NodeCache) replaceSnapshot(nodes []Node) (batch NodeChangeBatch, changed bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
