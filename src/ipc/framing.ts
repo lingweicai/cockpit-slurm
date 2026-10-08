@@ -1,4 +1,14 @@
-import { MAX_FRAME_SIZE, PROTOCOL_NAME, PROTOCOL_VERSION, type Envelope } from './types.ts';
+import {
+  MAX_FRAME_SIZE,
+  PROTOCOL_NAME,
+  PROTOCOL_VERSION,
+  type Envelope,
+  type NodeChange,
+  type NodeChangePayload,
+  type NodeSnapshotPayload,
+  type NodeStreamMessage,
+  type NodeStreamNode,
+} from './types.ts';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -36,7 +46,84 @@ export function validateEnvelope(value: unknown): value is Envelope {
   );
 }
 
-export function encodeFrame(message: Envelope): Uint8Array {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isGeneration(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string';
+}
+
+function isNodeStreamNode(value: unknown): value is NodeStreamNode {
+  if (!isRecord(value) || !isRecord(value.metadata) || !isRecord(value.spec) || !isRecord(value.status)) {
+    return false;
+  }
+
+  const metadata = value.metadata;
+  const spec = value.spec;
+  const status = value.status;
+  const optionalNumbers = ['cpuLoad', 'realMemory', 'allocMemory', 'freeMemory'] as const;
+
+  return isNonEmptyString(metadata.name) &&
+    isNonEmptyString(metadata.kind) &&
+    isGeneration(metadata.generation) &&
+    typeof metadata.observedAt === 'string' &&
+    !Number.isNaN(Date.parse(metadata.observedAt)) &&
+    isNonEmptyString(metadata.source) &&
+    isNonEmptyString(spec.nodeName) &&
+    isOptionalString(spec.address) &&
+    isOptionalString(spec.hostname) &&
+    optionalNumbers.every(key => spec[key] === undefined || (typeof spec[key] === 'number' && Number.isFinite(spec[key]))) &&
+    isOptionalString(status.state) &&
+    (status.stateFlags === undefined || (Array.isArray(status.stateFlags) && status.stateFlags.every(flag => typeof flag === 'string'))) &&
+    isOptionalString(status.reason);
+}
+
+function isNodeSnapshotPayload(value: unknown): value is NodeSnapshotPayload {
+  if (!isRecord(value) || value.resource !== 'node' || value.event !== 'snapshot' ||
+      !isGeneration(value.generation) || !Array.isArray(value.nodes) ||
+      !value.nodes.every(isNodeStreamNode)) {
+    return false;
+  }
+
+  const identities = value.nodes.map(node => node.spec.nodeName);
+  return new Set(identities).size === identities.length;
+}
+
+function isNodeChange(value: unknown): value is NodeChange {
+  return isRecord(value) &&
+    (value.kind === 'added' || value.kind === 'updated' || value.kind === 'removed') &&
+    isNodeStreamNode(value.node);
+}
+
+function isNodeChangePayload(value: unknown): value is NodeChangePayload {
+  if (!isRecord(value) || value.resource !== 'node' || value.event !== 'changes' ||
+      !isGeneration(value.generation) || !Array.isArray(value.changes) ||
+      value.changes.length === 0 || !value.changes.every(isNodeChange)) {
+    return false;
+  }
+
+  const identities = value.changes.map(change => change.node.spec.nodeName);
+  return new Set(identities).size === identities.length;
+}
+
+export function validateNodeStreamMessage(value: unknown): value is NodeStreamMessage {
+  if (!validateEnvelope(value) || value.type !== 'event' || !isRecord(value.payload)) {
+    return false;
+  }
+
+  return isNodeSnapshotPayload(value.payload) || isNodeChangePayload(value.payload);
+}
+
+export function encodeFrame<TPayload>(message: Envelope<TPayload>): Uint8Array {
   const json = JSON.stringify(message);
   if (json === undefined) {
     throw new Error('failed to encode message as JSON');

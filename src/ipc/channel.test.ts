@@ -62,13 +62,13 @@ function run(): void {
 
     const bytes = new Uint8Array([1, 2, 3]);
     let received: Uint8Array | ArrayBuffer | null = null;
-    let closeError: Error | null = null;
+    const closeError: { value: Error | null } = { value: null };
     let closeCount = 0;
     channel.onmessage = data => {
         received = data;
     };
     channel.onerror = error => {
-        closeError = error;
+        closeError.value = error;
     };
     channel.onclose = () => {
         closeCount++;
@@ -78,7 +78,7 @@ function run(): void {
     assertEqual(received, bytes, 'native channel binary message should be forwarded');
 
     listeners.get('close')?.({}, { problem: 'not-authorized' });
-    assertEqual(closeError?.message, 'not-authorized', 'native channel close problem should be surfaced');
+    assertEqual(closeError.value?.message, 'not-authorized', 'native channel close problem should be surfaced');
     assertEqual(closeCount, 1, 'native channel close should be forwarded');
 
     channel.send(bytes);
