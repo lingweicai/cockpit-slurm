@@ -163,9 +163,8 @@ const ApplicationContent = () => {
 };
 
 export const Application = () => {
-    const createNodeClient = useCallback(() => createIpcClient(createChannel(resolveSocketPath())), []);
     return (
-        <NodeProvider createClient={ createNodeClient }>
+        <NodeProvider socketPath={ resolveSocketPath() }>
             <ApplicationContent />
         </NodeProvider>
     );
