@@ -19,7 +19,15 @@ import { NodeTable } from './node-table';
 const _ = cockpit.gettext;
 
 const ApplicationContent = () => {
-    const { nodes, generation, loading: nodesLoading, error: nodesError, refresh: refreshNodes } = useNodes();
+    const {
+        nodes,
+        generation,
+        loading: nodesLoading,
+        connected: nodesConnected,
+        reconnecting: nodesReconnecting,
+        error: nodesError,
+        refresh: refreshNodes,
+    } = useNodes();
     const [hostname, setHostname] = useState(_("Unknown"));
     const [socketPath, setSocketPath] = useState(resolveSocketPath());
     const [socketStatus, setSocketStatus] = useState('Checking socket…');
@@ -31,6 +39,20 @@ const ApplicationContent = () => {
     const [lastMessageId, setLastMessageId] = useState('None');
     const [roundTripMs, setRoundTripMs] = useState<number | null>(null);
     const [debugLog, setDebugLog] = useState<string[]>([]);
+    const nodeStreamTitle = nodesError
+        ? 'Node stream error'
+        : nodesLoading
+            ? 'Waiting for Node snapshot'
+            : nodesReconnecting
+                ? 'Reconnecting to Node stream'
+                : nodesConnected
+                    ? `Node stream live (generation ${generation})`
+                    : 'Connecting to Node stream';
+    const nodeStreamVariant = nodesError
+        ? 'danger'
+        : nodesLoading || !nodesConnected
+            ? nodesReconnecting ? 'warning' : 'info'
+            : 'success';
 
     const appendDebugLog = useCallback((entry: string) => {
         setDebugLog(prev => [...prev.slice(-9), entry]);
@@ -136,8 +158,8 @@ const ApplicationContent = () => {
                         <div>Round trip: { roundTripMs === null ? 'Not measured' : `${roundTripMs} ms` }</div>
                     </div>
                     <Alert
-                    variant={ nodesError ? 'danger' : nodesLoading ? 'info' : 'success' }
-                    title={ nodesError ? 'Node query failed' : nodesLoading ? 'Loading nodes' : `Nodes loaded (generation ${generation})` }
+                    variant={ nodeStreamVariant }
+                    title={ nodeStreamTitle }
                     style={{ marginTop: '1rem' }}
                     >
                         { nodesError ? nodesError.message : `${nodes.length} node(s) returned` }

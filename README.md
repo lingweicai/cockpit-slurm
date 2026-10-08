@@ -159,6 +159,21 @@ Rules configuration can be found in the `.stylelintrc.json` file.
 
 # Running tests locally
 
+The Node stream backend path, including synchronization, cache changes,
+multi-client fan-out, reconnect snapshots, and Unix socket cleanup, is covered
+by:
+
+    go test ./internal/ipc -run TestNodeStreamEndToEndTracksSynchronizationAndClientLifecycle
+    npm run test:ipc
+
+For a live Slurm/Cockpit acceptance check, open the Nodes page and confirm the
+stream reports connected with the current generation. Change a node's state
+through the site's normal Slurm administration procedure and confirm the table
+updates without a page reload. Reload the page and verify that a fresh snapshot
+converges to the current Slurm state. The backend integration test uses a
+controlled Node adapter so it can also check change fan-out and client
+disconnection deterministically without modifying a real cluster.
+
 Run `make check` to build an RPM, install it into a standard Cockpit test VM
 (centos-9-stream by default), and run the test/check-application integration test on
 it. This uses Cockpit's Chrome DevTools Protocol based browser tests, through a
