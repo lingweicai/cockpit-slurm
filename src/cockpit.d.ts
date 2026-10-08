@@ -1,5 +1,11 @@
+interface CockpitChannelOptions {
+  payload?: string;
+  unix?: string;
+  binary?: boolean;
+}
+
 declare const cockpit: {
-  channel(options: Record<string, unknown>): {
+  channel(options: CockpitChannelOptions): {
     close: () => void;
     send: (data: Uint8Array | ArrayBuffer | number[]) => void;
     addEventListener: (event: string, handler: (event: unknown, data: unknown) => void) => void;

@@ -57,6 +57,14 @@ and backend files to:
 To start the cockpit-slurm service in the backend, run:
 `sudo systemctl start cockpit-slurm`
 
+The frontend connects directly to the daemon Unix socket through Cockpit's
+native `payload: "stream"` channel. The socket is owned by
+`cockpit-slurm:cockpit-slurm` with mode `0660`, and `/run/cockpit-slurm` is
+owned by the same account and group with mode `0750`. Add each authorized
+Cockpit login user to the `cockpit-slurm` group; users outside that group
+cannot traverse the runtime directory or connect to the socket. Restart the
+user's Cockpit session after changing group membership.
+
 ## Install for development user
 
 For development, you usually want to run your module straight out of the git
