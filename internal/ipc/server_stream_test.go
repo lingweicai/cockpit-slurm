@@ -19,6 +19,12 @@ type mutableNodeAdapter struct {
 	nodes []resource.Node
 }
 
+type transportCommandHandler struct{}
+
+func (transportCommandHandler) Handle(_ context.Context, message protocol.Envelope) protocol.Envelope {
+	return protocol.NewEnvelope(message.MessageID, protocol.MessageCommandResponse, json.RawMessage(`{"result":"transport-test"}`))
+}
+
 func (a *mutableNodeAdapter) ListNodes(context.Context) ([]resource.Node, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -79,6 +85,9 @@ func TestServerStreamsNodeSnapshotAndCleansUpDisconnectedClient(t *testing.T) {
 	if len(payload.Nodes) != 1 || payload.Nodes[0].Identity() != "node001" {
 		t.Fatalf("snapshot nodes = %#v, want node001", payload.Nodes)
 	}
+	if got := server.connections.Count(); got != 1 {
+		t.Fatalf("registered connections = %d, want 1", got)
+	}
 
 	if err := client.Close(); err != nil {
 		t.Fatalf("close client: %v", err)
@@ -95,6 +104,91 @@ func TestServerStreamsNodeSnapshotAndCleansUpDisconnectedClient(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Serve did not exit after close")
+	}
+}
+
+func TestNodeStreamConnectionDispatchesWhilePublishingEvents(t *testing.T) {
+	cache := resource.NewNodeCache()
+	cache.ReplaceSnapshot([]resource.Node{resource.NewNode("node001", 0)})
+	registry, err := stream.NewNodeStreamRegistry(cache, stream.DefaultNodeStreamQueueSize)
+	if err != nil {
+		t.Fatalf("NewNodeStreamRegistry returned error: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "cockpit-slurm.sock")
+	server := NewServerWithNodeStreams(socketPath, registry)
+	if err := server.dispatcher.Register(protocol.MessageCommand, transportCommandHandler{}); err != nil {
+		t.Fatalf("register test command handler: %v", err)
+	}
+	if err := server.Listen(); err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- server.Serve(ctx) }()
+
+	client, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Dial returned error: %v", err)
+	}
+	defer client.Close()
+	if err := client.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set client deadline: %v", err)
+	}
+	decoder := protocol.NewDecoder(client)
+	snapshot, err := decoder.Decode()
+	if err != nil {
+		t.Fatalf("decode initial snapshot: %v", err)
+	}
+	if snapshot.Type != protocol.MessageEvent {
+		t.Fatalf("initial message type = %q, want event", snapshot.Type)
+	}
+
+	request := protocol.NewEnvelope("COMMAND-DURING-STREAM", protocol.MessageCommand, json.RawMessage(`{"test":"transport"}`))
+	writeDone := make(chan error, 1)
+	go func() { writeDone <- protocol.NewEncoder(client).Encode(request) }()
+
+	updated := resource.NewNode("node001", 0)
+	updated.Status.State = "DOWN"
+	cache.ReplaceSnapshotAndPublish([]resource.Node{updated}, registry)
+	if err := <-writeDone; err != nil {
+		t.Fatalf("send command while publishing: %v", err)
+	}
+
+	gotCommandResponse := false
+	gotChanges := false
+	for range 2 {
+		message, err := decoder.Decode()
+		if err != nil {
+			t.Fatalf("decode concurrent server message: %v", err)
+		}
+		switch message.Type {
+		case protocol.MessageCommandResponse:
+			if message.MessageID != request.MessageID {
+				t.Fatalf("command response message ID = %q, want %q", message.MessageID, request.MessageID)
+			}
+			gotCommandResponse = true
+		case protocol.MessageEvent:
+			var payload struct {
+				Event      string `json:"event"`
+				Generation uint64 `json:"generation"`
+			}
+			if err := json.Unmarshal(message.Payload, &payload); err != nil {
+				t.Fatalf("decode change event payload: %v", err)
+			}
+			if payload.Event != "changes" || payload.Generation != 2 {
+				t.Fatalf("change event = %#v, want generation 2 changes", payload)
+			}
+			gotChanges = true
+		default:
+			t.Fatalf("unexpected server message type %q", message.Type)
+		}
+	}
+	if !gotCommandResponse || !gotChanges {
+		t.Fatalf("received command response=%t changes=%t, want both", gotCommandResponse, gotChanges)
 	}
 }
 

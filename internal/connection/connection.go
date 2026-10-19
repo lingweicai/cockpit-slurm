@@ -70,7 +70,7 @@ type ConnectionManager interface {
 }
 
 type manager struct {
-	mu         sync.Mutex
+	mu          sync.Mutex
 	connections map[string]*Connection
 }
 
@@ -230,16 +230,15 @@ func peerIdentity(conn net.Conn) (PeerIdentity, error) {
 		return PeerIdentity{}, ErrPeerIdentityUnavailable
 	}
 
-	userName := ""
-	if u, err := user.LookupId(strconv.Itoa(int(ucred.Uid))); err == nil {
-		userName = u.Username
-	}
+	return peerIdentityForCredentials(ucred.Uid, ucred.Gid, user.LookupId)
+}
 
-	return PeerIdentity{
-		UID:      ucred.Uid,
-		GID:      ucred.Gid,
-		Username: userName,
-	}, nil
+func peerIdentityForCredentials(uid, gid uint32, lookup func(string) (*user.User, error)) (PeerIdentity, error) {
+	resolved, err := lookup(strconv.Itoa(int(uid)))
+	if err != nil || resolved == nil || resolved.Username == "" {
+		return PeerIdentity{}, ErrPeerIdentityUnavailable
+	}
+	return PeerIdentity{UID: uid, GID: gid, Username: resolved.Username}, nil
 }
 
 func newID(prefix string) (string, error) {

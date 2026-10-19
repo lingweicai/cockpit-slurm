@@ -2,7 +2,6 @@ package stream
 
 import (
 	"encoding/json"
-	"net"
 	"sync"
 	"testing"
 	"time"
@@ -20,16 +19,9 @@ func TestNodeStreamSendsSnapshotBeforeChanges(t *testing.T) {
 		t.Fatal("initial snapshot did not change cache")
 	}
 	registry := newTestRegistry(t, cache, 8)
-	serverConn, clientConn := net.Pipe()
-	defer clientConn.Close()
-	nodeStream := registry.Register(serverConn)
-	if nodeStream == nil {
-		t.Fatal("Register returned nil stream")
-	}
-	defer nodeStream.Close()
+	sink := registerTestSink(t, registry)
 
-	decoder := protocol.NewDecoder(clientConn)
-	snapshot := decodeNodeMessage(t, decoder)
+	snapshot := receiveNodeMessage(t, sink.outbound)
 	assertNodeEvent(t, snapshot, "snapshot", 1)
 	var snapshotPayload struct {
 		Nodes []resource.Node `json:"nodes"`
@@ -53,7 +45,7 @@ func TestNodeStreamSendsSnapshotBeforeChanges(t *testing.T) {
 	added := resource.NewNode("node003", 0)
 	cache.ReplaceSnapshotAndPublish([]resource.Node{updated, added}, registry)
 
-	changes := decodeNodeMessage(t, decoder)
+	changes := receiveNodeMessage(t, sink.outbound)
 	assertNodeEvent(t, changes, "changes", 2)
 	var changePayload struct {
 		Changes []resource.NodeChange `json:"changes"`
@@ -75,31 +67,23 @@ func TestNodeStreamRegistryFansOutAndCleansDisconnectedClient(t *testing.T) {
 	cache := resource.NewNodeCache()
 	cache.ReplaceSnapshot([]resource.Node{resource.NewNode("node001", 0)})
 	registry := newTestRegistry(t, cache, 8)
+	sinkA := registerTestSink(t, registry)
+	sinkB := registerTestSink(t, registry)
+	assertNodeEvent(t, receiveNodeMessage(t, sinkA.outbound), "snapshot", 1)
+	assertNodeEvent(t, receiveNodeMessage(t, sinkB.outbound), "snapshot", 1)
 
-	serverA, clientA := net.Pipe()
-	serverB, clientB := net.Pipe()
-	streamA := registry.Register(serverA)
-	streamB := registry.Register(serverB)
-	if streamA == nil || streamB == nil {
-		t.Fatal("Register failed")
-	}
-	decoderA := protocol.NewDecoder(clientA)
-	decoderB := protocol.NewDecoder(clientB)
-	assertNodeEvent(t, decodeNodeMessage(t, decoderA), "snapshot", 1)
-	assertNodeEvent(t, decodeNodeMessage(t, decoderB), "snapshot", 1)
-
-	_ = clientA.Close()
+	sinkA.nodeStream.Unregister()
 	waitFor(t, func() bool { return registry.ActiveCount() == 1 })
 
 	updated := resource.NewNode("node001", 0)
 	updated.Status.State = "IDLE"
 	cache.ReplaceSnapshotAndPublish([]resource.Node{updated}, registry)
-	assertNodeEvent(t, decodeNodeMessage(t, decoderB), "changes", 2)
+	assertNodeEvent(t, receiveNodeMessage(t, sinkB.outbound), "changes", 2)
 	if got := registry.ActiveCount(); got != 1 {
 		t.Fatalf("active streams = %d, want only connected client", got)
 	}
 
-	_ = clientB.Close()
+	sinkB.nodeStream.Unregister()
 	waitFor(t, func() bool { return registry.ActiveCount() == 0 })
 }
 
@@ -108,21 +92,28 @@ func TestNodeStreamRegistrationAndCommitHaveNoSnapshotGap(t *testing.T) {
 		cache := resource.NewNodeCache()
 		cache.ReplaceSnapshot([]resource.Node{resource.NewNode("node001", 0)})
 		registry := newTestRegistry(t, cache, 4)
-		serverConn, clientConn := net.Pipe()
+		outbound := make(chan protocol.Envelope, 4)
+		var nodeStream *NodeStream
 
 		var register sync.WaitGroup
 		register.Add(1)
 		go func() {
 			defer register.Done()
-			registry.Register(serverConn)
+			nodeStream = registry.Register(func(message protocol.Envelope) bool {
+				select {
+				case outbound <- message:
+					return true
+				default:
+					return false
+				}
+			}, func() {})
 		}()
 		updated := resource.NewNode("node001", 0)
 		updated.Spec.RealMemory = 1
 		cache.ReplaceSnapshotAndPublish([]resource.Node{updated}, registry)
 		register.Wait()
 
-		decoder := protocol.NewDecoder(clientConn)
-		first := decodeNodeMessage(t, decoder)
+		first := receiveNodeMessage(t, outbound)
 		if first.Payload == nil {
 			t.Fatal("first stream message has no payload")
 		}
@@ -135,13 +126,15 @@ func TestNodeStreamRegistrationAndCommitHaveNoSnapshotGap(t *testing.T) {
 		}
 		switch {
 		case payload.Event == "snapshot" && payload.Generation == 1:
-			second := decodeNodeMessage(t, decoder)
+			second := receiveNodeMessage(t, outbound)
 			assertNodeEvent(t, second, "changes", 2)
 		case payload.Event == "snapshot" && payload.Generation == 2:
 		default:
 			t.Fatalf("unexpected baseline: event=%q generation=%d", payload.Event, payload.Generation)
 		}
-		_ = clientConn.Close()
+		if nodeStream != nil {
+			nodeStream.Unregister()
+		}
 		registry.CloseAll()
 	}
 }
@@ -149,14 +142,8 @@ func TestNodeStreamRegistrationAndCommitHaveNoSnapshotGap(t *testing.T) {
 func TestNodeStreamSerializesConcurrentPublications(t *testing.T) {
 	cache := resource.NewNodeCache()
 	registry := newTestRegistry(t, cache, 128)
-	serverConn, clientConn := net.Pipe()
-	nodeStream := registry.Register(serverConn)
-	if nodeStream == nil {
-		t.Fatal("Register returned nil stream")
-	}
-	defer nodeStream.Close()
-	decoder := protocol.NewDecoder(clientConn)
-	assertNodeEvent(t, decodeNodeMessage(t, decoder), "snapshot", 0)
+	sink := registerTestSink(t, registry)
+	assertNodeEvent(t, receiveNodeMessage(t, sink.outbound), "snapshot", 0)
 
 	const publications = 64
 	var writers sync.WaitGroup
@@ -178,7 +165,7 @@ func TestNodeStreamSerializesConcurrentPublications(t *testing.T) {
 	writers.Wait()
 
 	for i := 0; i < publications; i++ {
-		message := decodeNodeMessage(t, decoder)
+		message := receiveNodeMessage(t, sink.outbound)
 		if message.Type != protocol.MessageEvent {
 			t.Fatalf("message type = %q, want event", message.Type)
 		}
@@ -188,12 +175,7 @@ func TestNodeStreamSerializesConcurrentPublications(t *testing.T) {
 func TestNodeStreamQueueOverflowClosesOnlySlowStream(t *testing.T) {
 	cache := resource.NewNodeCache()
 	registry := newTestRegistry(t, cache, 1)
-	serverConn, clientConn := net.Pipe()
-	nodeStream := registry.Register(serverConn)
-	if nodeStream == nil {
-		t.Fatal("Register returned nil stream")
-	}
-	defer clientConn.Close()
+	sink := registerTestSink(t, registry)
 
 	for generation := uint64(1); generation <= 3; generation++ {
 		registry.Publish(resource.NodeChangeBatch{
@@ -209,9 +191,14 @@ func TestNodeStreamQueueOverflowClosesOnlySlowStream(t *testing.T) {
 
 	waitFor(t, func() bool { return registry.ActiveCount() == 0 })
 	select {
-	case <-nodeStream.Done():
+	case <-sink.nodeStream.Done():
 	case <-time.After(time.Second):
 		t.Fatal("slow stream was not closed after queue overflow")
+	}
+	select {
+	case <-sink.closed:
+	case <-time.After(time.Second):
+		t.Fatal("connection close callback was not invoked after queue overflow")
 	}
 }
 
@@ -224,23 +211,38 @@ func newTestRegistry(t *testing.T, cache *resource.NodeCache, queueSize int) *No
 	return registry
 }
 
-func decodeNodeMessage(t *testing.T, decoder *protocol.Decoder) protocol.Envelope {
+type testSink struct {
+	nodeStream *NodeStream
+	outbound   chan protocol.Envelope
+	closed     chan struct{}
+}
+
+func registerTestSink(t *testing.T, registry *NodeStreamRegistry) *testSink {
 	t.Helper()
-	type result struct {
-		envelope protocol.Envelope
-		err      error
+	sink := &testSink{
+		outbound: make(chan protocol.Envelope, registry.QueueSize()),
+		closed:   make(chan struct{}),
 	}
-	resultCh := make(chan result, 1)
-	go func() {
-		envelope, err := decoder.Decode()
-		resultCh <- result{envelope: envelope, err: err}
-	}()
-	select {
-	case result := <-resultCh:
-		if result.err != nil {
-			t.Fatalf("decode stream message: %v", result.err)
+	sink.nodeStream = registry.Register(func(message protocol.Envelope) bool {
+		select {
+		case sink.outbound <- message:
+			return true
+		default:
+			return false
 		}
-		return result.envelope
+	}, func() { close(sink.closed) })
+	if sink.nodeStream == nil {
+		t.Fatal("Register returned nil stream")
+	}
+	t.Cleanup(sink.nodeStream.Unregister)
+	return sink
+}
+
+func receiveNodeMessage(t *testing.T, outbound <-chan protocol.Envelope) protocol.Envelope {
+	t.Helper()
+	select {
+	case envelope := <-outbound:
+		return envelope
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for stream message")
 		return protocol.Envelope{}

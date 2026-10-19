@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
 	"testing"
 )
@@ -54,6 +55,9 @@ func TestNewConnectionCreatesIDsAndUserContext(t *testing.T) {
 	}
 	if conn.User.GID != uint32(os.Getgid()) {
 		t.Fatalf("user GID = %d, want %d", conn.User.GID, uint32(os.Getgid()))
+	}
+	if conn.User.Username == "" {
+		t.Fatal("user username should be resolved from peer UID")
 	}
 	if conn.Context == nil {
 		t.Fatal("connection context should not be nil")
@@ -118,6 +122,21 @@ func TestPeerIdentityFailureClosesConnection(t *testing.T) {
 			t.Fatalf("peerIdentity(nil) error = %v, want %v", err, ErrPeerIdentityUnavailable)
 		}
 	})
+}
+
+func TestPeerIdentityRequiresResolvedLinuxUsername(t *testing.T) {
+	lookupFailure := func(string) (*user.User, error) {
+		return nil, errors.New("unknown UID")
+	}
+	if _, err := peerIdentityForCredentials(12345, 12345, lookupFailure); !errors.Is(err, ErrPeerIdentityUnavailable) {
+		t.Fatalf("lookup failure error = %v, want %v", err, ErrPeerIdentityUnavailable)
+	}
+	emptyUsername := func(string) (*user.User, error) {
+		return &user.User{}, nil
+	}
+	if _, err := peerIdentityForCredentials(12345, 12345, emptyUsername); !errors.Is(err, ErrPeerIdentityUnavailable) {
+		t.Fatalf("empty username error = %v, want %v", err, ErrPeerIdentityUnavailable)
+	}
 }
 
 func TestConnectionManagerTracksConnections(t *testing.T) {

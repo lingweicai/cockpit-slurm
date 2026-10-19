@@ -1,13 +1,10 @@
 package stream
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
-	"net"
 	"sync"
 	"sync/atomic"
 
@@ -47,10 +44,21 @@ func NewNodeStreamRegistry(cache *resource.NodeCache, queueSize int) (*NodeStrea
 	}, nil
 }
 
-// Register adds a connection and enqueues its authoritative snapshot before
+// QueueSize is the bounded outbound capacity required for each registered stream.
+func (r *NodeStreamRegistry) QueueSize() int {
+	if r == nil {
+		return 0
+	}
+	return r.queueSize
+}
+
+// Register subscribes a sender and enqueues its authoritative snapshot before
 // allowing any later cache commit to publish to the new stream.
-func (r *NodeStreamRegistry) Register(conn net.Conn) *NodeStream {
-	if r == nil || conn == nil {
+func (r *NodeStreamRegistry) Register(enqueue func(protocol.Envelope) bool, closeConnection func()) *NodeStream {
+	if r == nil || enqueue == nil {
+		if closeConnection != nil {
+			closeConnection()
+		}
 		return nil
 	}
 
@@ -59,12 +67,14 @@ func (r *NodeStreamRegistry) Register(conn net.Conn) *NodeStream {
 		envelope, err := r.snapshotEnvelope(snapshot)
 		if err != nil {
 			log.Printf("encode Node stream snapshot: %v", err)
-			_ = conn.Close()
+			if closeConnection != nil {
+				closeConnection()
+			}
 			return
 		}
 
 		r.mu.Lock()
-		stream = newNodeStream(conn, r, r.queueSize)
+		stream = newNodeStream(r, enqueue, closeConnection)
 		r.streams[stream] = struct{}{}
 		if !stream.enqueue(envelope) {
 			delete(r.streams, stream)
@@ -75,10 +85,6 @@ func (r *NodeStreamRegistry) Register(conn net.Conn) *NodeStream {
 		}
 		r.mu.Unlock()
 	})
-
-	if stream != nil {
-		stream.start()
-	}
 	return stream
 }
 
@@ -169,19 +175,19 @@ func (r *NodeStreamRegistry) nextMessageID() string {
 }
 
 type NodeStream struct {
-	conn     net.Conn
-	registry *NodeStreamRegistry
-	outbound chan protocol.Envelope
-	done     chan struct{}
-	close    sync.Once
+	registry        *NodeStreamRegistry
+	enqueueOutbound func(protocol.Envelope) bool
+	closeConnection func()
+	done            chan struct{}
+	close           sync.Once
 }
 
-func newNodeStream(conn net.Conn, registry *NodeStreamRegistry, queueSize int) *NodeStream {
+func newNodeStream(registry *NodeStreamRegistry, enqueue func(protocol.Envelope) bool, closeConnection func()) *NodeStream {
 	return &NodeStream{
-		conn:     conn,
-		registry: registry,
-		outbound: make(chan protocol.Envelope, queueSize),
-		done:     make(chan struct{}),
+		registry:        registry,
+		enqueueOutbound: enqueue,
+		closeConnection: closeConnection,
+		done:            make(chan struct{}),
 	}
 }
 
@@ -189,78 +195,28 @@ func (s *NodeStream) enqueue(envelope protocol.Envelope) bool {
 	select {
 	case <-s.done:
 		return false
-	case s.outbound <- envelope:
-		return true
 	default:
-		return false
 	}
-}
-
-func (s *NodeStream) start() {
-	go s.writeLoop()
-	go s.readLoop()
-}
-
-func (s *NodeStream) writeLoop() {
-	encoder := protocol.NewEncoder(s.conn)
-	for {
-		select {
-		case <-s.done:
-			return
-		case envelope := <-s.outbound:
-			if err := encoder.Encode(envelope); err != nil {
-				select {
-				case <-s.done:
-				default:
-					log.Printf("write Node stream: %v", err)
-				}
-				s.Close()
-				return
-			}
-		}
-	}
-}
-
-func (s *NodeStream) readLoop() {
-	var buf [1]byte
-	for {
-		n, err := s.conn.Read(buf[:])
-		if n > 0 {
-			log.Printf("Node stream received unexpected client data")
-			s.Close()
-			return
-		}
-		if err != nil {
-			if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
-				log.Printf("read Node stream: %v", err)
-			}
-			s.Close()
-			return
-		}
-	}
+	return s.enqueueOutbound(envelope)
 }
 
 func (s *NodeStream) Close() {
 	s.close.Do(func() {
 		close(s.done)
-		_ = s.conn.Close()
+		s.registry.Unregister(s)
+		if s.closeConnection != nil {
+			s.closeConnection()
+		}
+	})
+}
+
+func (s *NodeStream) Unregister() {
+	s.close.Do(func() {
+		close(s.done)
 		s.registry.Unregister(s)
 	})
 }
 
 func (s *NodeStream) Done() <-chan struct{} {
 	return s.done
-}
-
-func (s *NodeStream) Wait(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	select {
-	case <-s.done:
-		return nil
-	case <-ctx.Done():
-		s.Close()
-		return ctx.Err()
-	}
 }
