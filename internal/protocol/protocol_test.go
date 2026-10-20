@@ -123,6 +123,32 @@ func TestDecoderRejectsInvalidUTF8JSON(t *testing.T) {
 	}
 }
 
+func TestDecoderRejectsUnknownEnvelopeFields(t *testing.T) {
+	var buf bytes.Buffer
+	message := `{"protocol":"cockpit-slurm","version":"1.0","messageId":"MSG001","type":"ping","payload":{},"unexpected":true}`
+	var header [FrameHeaderSize]byte
+	binary.BigEndian.PutUint32(header[:], uint32(len(message)))
+	buf.Write(header[:])
+	buf.WriteString(message)
+
+	if _, err := NewDecoder(&buf).Decode(); err == nil {
+		t.Fatal("Decode() accepted an unknown envelope field")
+	}
+}
+
+func TestDecoderRejectsDuplicateEnvelopeFields(t *testing.T) {
+	var buf bytes.Buffer
+	message := `{"protocol":"cockpit-slurm","version":"1.0","messageId":"MSG001","type":"ping","payload":{},"messageId":"MSG002"}`
+	var header [FrameHeaderSize]byte
+	binary.BigEndian.PutUint32(header[:], uint32(len(message)))
+	buf.Write(header[:])
+	buf.WriteString(message)
+
+	if _, err := NewDecoder(&buf).Decode(); err == nil {
+		t.Fatal("Decode() accepted a duplicate envelope field")
+	}
+}
+
 func TestValidateRejectsUnknownMessageType(t *testing.T) {
 	e := Envelope{
 		Protocol:  ProtocolName,
@@ -227,6 +253,124 @@ func TestValidateRejectsMissingPayload(t *testing.T) {
 
 	if err := ValidateEnvelope(e); err == nil {
 		t.Fatal("ValidateEnvelope() accepted a missing payload")
+	}
+}
+
+func TestCapabilityMessageTypesAreKnown(t *testing.T) {
+	for _, messageType := range []MessageType{MessageCapabilitiesRequest, MessageCapabilitiesResponse} {
+		if !messageType.IsKnown() {
+			t.Errorf("message type %q is not recognized", messageType)
+		}
+	}
+}
+
+func TestCapabilityEnvelopesRoundTripWithV1Framing(t *testing.T) {
+	request := NewEnvelope("cap-req-1", MessageCapabilitiesRequest, json.RawMessage(`{}`))
+	response := NewEnvelope("cap-req-1", MessageCapabilitiesResponse, json.RawMessage(`{"capabilities":{"nodes.drain":true,"nodes.resume":false}}`))
+	var framed bytes.Buffer
+	encoder := NewEncoder(&framed)
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode capabilities request: %v", err)
+	}
+	if err := encoder.Encode(response); err != nil {
+		t.Fatalf("encode capabilities response: %v", err)
+	}
+	decoder := NewDecoder(&framed)
+	requestGot, err := decoder.Decode()
+	if err != nil {
+		t.Fatalf("decode capabilities request: %v", err)
+	}
+	responseGot, err := decoder.Decode()
+	if err != nil {
+		t.Fatalf("decode capabilities response: %v", err)
+	}
+	if requestGot.Type != MessageCapabilitiesRequest || responseGot.Type != MessageCapabilitiesResponse || responseGot.MessageID != request.MessageID {
+		t.Fatalf("round-trip messages = %#v and %#v, want correlated v1 capability messages", requestGot, responseGot)
+	}
+	if _, err := DecodeCapabilitiesRequestPayload(requestGot.Payload); err != nil {
+		t.Fatalf("validate request payload: %v", err)
+	}
+	if _, err := DecodeCapabilitiesResponsePayload(responseGot.Payload); err != nil {
+		t.Fatalf("validate response payload: %v", err)
+	}
+}
+
+func TestDecodeCapabilitiesRequestPayload(t *testing.T) {
+	if _, err := DecodeCapabilitiesRequestPayload(json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("decode empty capabilities request: %v", err)
+	}
+	if _, err := DecodeCapabilitiesRequestPayload(json.RawMessage(`{"unexpected":true}`)); err == nil {
+		t.Fatal("capabilities request accepted an unknown field")
+	}
+	if _, err := DecodeCapabilitiesRequestPayload(json.RawMessage(`null`)); err == nil {
+		t.Fatal("capabilities request accepted a non-object payload")
+	}
+}
+
+func TestDecodeCapabilitiesResponsePayloadRequiresExplicitBooleans(t *testing.T) {
+	payload, err := DecodeCapabilitiesResponsePayload(json.RawMessage(`{"capabilities":{"nodes.drain":true,"nodes.resume":false}}`))
+	if err != nil {
+		t.Fatalf("decode capabilities response: %v", err)
+	}
+	if !payload.Capabilities.NodesDrain || payload.Capabilities.NodesResume {
+		t.Fatalf("capabilities = %#v, want drain=true and resume=false", payload.Capabilities)
+	}
+
+	invalidPayloads := []string{
+		`{"capabilities":{"nodes.drain":true}}`,
+		`{"capabilities":{"nodes.drain":true,"nodes.resume":false,"jobs.submit":true}}`,
+		`{"capabilities":{"nodes.drain":true,"nodes.resume":null}}`,
+		`{"capabilities":{"nodes.drain":true,"nodes.resume":false},"extra":true}`,
+	}
+	for _, input := range invalidPayloads {
+		if _, err := DecodeCapabilitiesResponsePayload(json.RawMessage(input)); err == nil {
+			t.Errorf("capabilities response accepted invalid payload %s", input)
+		}
+	}
+}
+
+func TestDecodeNodeCommandRequestPayload(t *testing.T) {
+	reason := "scheduled maintenance"
+	request, err := DecodeNodeCommandRequestPayload(json.RawMessage(`{"commandId":"cmd-123","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"DRAIN","reason":"scheduled maintenance"}}`))
+	if err != nil {
+		t.Fatalf("decode drain request: %v", err)
+	}
+	if request.CommandID != "cmd-123" || request.Target.NodeName != "c21" || request.Parameters.State != "DRAIN" || request.Parameters.Reason == nil || *request.Parameters.Reason != reason {
+		t.Fatalf("decoded request = %#v", request)
+	}
+
+	resume, err := DecodeNodeCommandRequestPayload(json.RawMessage(`{"commandId":"cmd-124","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"RESUME"}}`))
+	if err != nil || resume.Parameters.State != "RESUME" {
+		t.Fatalf("decode resume request = %#v, err = %v", resume, err)
+	}
+
+	invalid := []string{
+		`{"commandId":"cmd-1","resource":"node","resource":"jobs","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"RESUME"}}`,
+		`{"commandId":"cmd-1","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"DRAIN"}}`,
+		`{"commandId":"cmd-1","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"DRAIN","reason":null}}`,
+		`{"commandId":"cmd-1","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"RESUME","reason":"unexpected"}}`,
+		`{"commandId":"cmd-1","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"RESUME","reason":null}}`,
+		`{"commandId":"cmd-1","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"POWER"}}`,
+		`{"commandId":"cmd-1","resource":"node","command":"update","target":{"nodeName":"c21","extra":true},"parameters":{"state":"RESUME"}}`,
+	}
+	for _, input := range invalid {
+		if _, err := DecodeNodeCommandRequestPayload(json.RawMessage(input)); err == nil {
+			t.Errorf("accepted invalid command request %s", input)
+		}
+	}
+}
+
+func TestDecodeCommandResponseAndStatusPayloads(t *testing.T) {
+	response, err := DecodeNodeCommandResponsePayload(json.RawMessage(`{"commandId":"cmd-123","resource":"node","command":"update","status":"succeeded"}`))
+	if err != nil || response.Status != CommandStatusSucceeded {
+		t.Fatalf("decode command response = %#v, err = %v", response, err)
+	}
+	status, err := DecodeCommandStatusPayload(json.RawMessage(`{"commandId":"cmd-123","status":"unknown"}`))
+	if err != nil || status.Status != CommandStatusUnknown {
+		t.Fatalf("decode command status = %#v, err = %v", status, err)
+	}
+	if _, err := DecodeCommandStatusPayload(json.RawMessage(`{"commandId":"cmd-123","status":"accepted"}`)); err == nil {
+		t.Fatal("accepted an internal command lifecycle state")
 	}
 }
 

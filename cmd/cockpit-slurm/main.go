@@ -7,6 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/lingweicai/cockpit-slurm/internal/dispatcher"
+	"github.com/lingweicai/cockpit-slurm/internal/identity"
 	"github.com/lingweicai/cockpit-slurm/internal/ipc"
 	"github.com/lingweicai/cockpit-slurm/internal/resource"
 	"github.com/lingweicai/cockpit-slurm/internal/stream"
@@ -30,7 +32,9 @@ func main() {
 		log.Fatalf("load initial Slurm node snapshot: %v", err)
 	}
 
-	server := ipc.NewServerWithNodeStreams("", streams)
+	resolver := identity.NewCapabilityResolver(identity.NewSacctmgrUserLookup())
+	messageDispatcher := dispatcher.NewDispatcherWithCacheAndCapabilities(cache, resolver)
+	server := ipc.NewServerWithNodeStreamsAndDispatcher("", streams, messageDispatcher)
 
 	if err := server.Listen(); err != nil {
 		log.Fatalf("listen for IPC socket: %v", err)

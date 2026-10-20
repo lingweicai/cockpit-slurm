@@ -34,9 +34,13 @@ type PeerIdentity struct {
 
 // UserContext is the canonical Phase 1E security context for a connection.
 type UserContext struct {
-	UID      uint32
-	GID      uint32
-	Username string
+	UID                 uint32
+	GID                 uint32
+	Username            string
+	AdminLevel          string
+	Accounts            []string
+	CoordinatorAccounts []string
+	Capabilities        map[string]bool
 }
 
 // Session represents one logical session for a connection.

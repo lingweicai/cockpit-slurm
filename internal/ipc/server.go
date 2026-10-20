@@ -2,7 +2,6 @@ package ipc
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -56,7 +55,11 @@ type Server struct {
 // NewServerWithNodeStreams creates a Unix socket server that streams Node
 // snapshots and changes to each accepted connection.
 func NewServerWithNodeStreams(socketPath string, registry *stream.NodeStreamRegistry) *Server {
-	server := NewServerWithDispatcher(socketPath, nil)
+	return NewServerWithNodeStreamsAndDispatcher(socketPath, registry, nil)
+}
+
+func NewServerWithNodeStreamsAndDispatcher(socketPath string, registry *stream.NodeStreamRegistry, messageDispatcher *dispatcher.MessageDispatcher) *Server {
+	server := NewServerWithDispatcher(socketPath, messageDispatcher)
 	server.nodeStreams = registry
 	return server
 }
@@ -223,26 +226,39 @@ func (s *Server) serveConnection(conn net.Conn) {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				return
 			}
-			payload, jsonErr := json.Marshal(map[string]string{
-				"code":    "INVALID_MESSAGE",
-				"message": err.Error(),
-			})
-			if jsonErr != nil {
-				return
-			}
-			response := protocol.NewEnvelope("ERR", protocol.MessageError, payload)
+			response := decodeErrorEnvelope(message.MessageID, err)
 			if !s.writeConnectionResponse(connState, outbound, response) {
 				return
 			}
 			return
 		}
 
-		response := s.dispatcher.Dispatch(connState.Context, message)
+		response := s.dispatcher.DispatchWithUser(connState.Context, connState.User, message)
 		if !enqueue(response) {
 			_ = connState.Close()
 			return
 		}
 	}
+}
+
+func decodeErrorEnvelope(messageID string, err error) protocol.Envelope {
+	if messageID == "" {
+		messageID = "ERR"
+	}
+	if errors.Is(err, protocol.ErrUnknownMessage) {
+		return protocol.NewErrorEnvelope(messageID, protocol.ErrorPayload{
+			Code:      protocol.ErrorCodeUnsupportedMessageType,
+			Category:  protocol.ErrorCategoryProtocol,
+			Message:   "Message type is not supported",
+			Retryable: false,
+		})
+	}
+	return protocol.NewErrorEnvelope(messageID, protocol.ErrorPayload{
+		Code:      protocol.ErrorCodeInvalidPayload,
+		Category:  protocol.ErrorCategoryValidation,
+		Message:   "Invalid protocol message",
+		Retryable: false,
+	})
 }
 
 func (s *Server) writeConnection(connState *connection.Connection, conn net.Conn, outbound <-chan outboundMessage, done chan<- struct{}) {

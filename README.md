@@ -65,6 +65,12 @@ Cockpit login user to the `cockpit-slurm` group; users outside that group
 cannot traverse the runtime directory or connect to the socket. Restart the
 user's Cockpit session after changing group membership.
 
+Capability requests query SlurmDB through `/usr/bin/sacctmgr` in read-only JSON
+mode as the `cockpit-slurm` service account. Ensure `sacctmgr` is installed and
+that this account can read user, association, and coordinator records. Lookup
+failures return `capability-unavailable`; they never grant capabilities by
+default.
+
 ## Install for development user
 
 For development, you usually want to run your module straight out of the git

@@ -4,22 +4,24 @@ package protocol
 type MessageType string
 
 const (
-	MessageHello              MessageType = "hello"
-	MessageHelloResponse      MessageType = "hello-response"
-	MessageQuery              MessageType = "query"
-	MessageQueryResponse      MessageType = "query-response"
-	MessageSubscribe          MessageType = "subscribe"
-	MessageSubscribeResponse  MessageType = "subscribe-response"
-	MessageUnsubscribe        MessageType = "unsubscribe"
-	MessageUnsubscribeResponse MessageType = "unsubscribe-response"
-	MessageCommand            MessageType = "command"
-	MessageCommandResponse    MessageType = "command-response"
-	MessageCommandStatus      MessageType = "command-status"
-	MessageEvent              MessageType = "event"
-	MessageError              MessageType = "error"
-	MessagePing               MessageType = "ping"
-	MessagePong               MessageType = "pong"
-	MessageClose              MessageType = "close"
+	MessageHello                MessageType = "hello"
+	MessageHelloResponse        MessageType = "hello-response"
+	MessageQuery                MessageType = "query"
+	MessageQueryResponse        MessageType = "query-response"
+	MessageSubscribe            MessageType = "subscribe"
+	MessageSubscribeResponse    MessageType = "subscribe-response"
+	MessageUnsubscribe          MessageType = "unsubscribe"
+	MessageUnsubscribeResponse  MessageType = "unsubscribe-response"
+	MessageCommand              MessageType = "command"
+	MessageCommandResponse      MessageType = "command-response"
+	MessageCommandStatus        MessageType = "command-status"
+	MessageCapabilitiesRequest  MessageType = "capabilities-request"
+	MessageCapabilitiesResponse MessageType = "capabilities-response"
+	MessageEvent                MessageType = "event"
+	MessageError                MessageType = "error"
+	MessagePing                 MessageType = "ping"
+	MessagePong                 MessageType = "pong"
+	MessageClose                MessageType = "close"
 )
 
 func (t MessageType) IsKnown() bool {
@@ -35,6 +37,8 @@ func (t MessageType) IsKnown() bool {
 		MessageCommand,
 		MessageCommandResponse,
 		MessageCommandStatus,
+		MessageCapabilitiesRequest,
+		MessageCapabilitiesResponse,
 		MessageEvent,
 		MessageError,
 		MessagePing,

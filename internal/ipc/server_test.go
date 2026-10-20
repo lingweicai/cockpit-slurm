@@ -166,6 +166,43 @@ func TestServerDispatchesHelloOverSocket(t *testing.T) {
 	}
 }
 
+func TestServerReturnsCanonicalErrorForUnsupportedMessageType(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "cockpit-slurm.sock")
+	server := NewServer(socketPath)
+	if err := server.Listen(); err != nil {
+		t.Fatalf("Listen() returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = server.Serve(ctx) }()
+
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("net.Dial() returned error: %v", err)
+	}
+	defer conn.Close()
+	request := protocol.NewEnvelope("UNKNOWN-1", protocol.MessageType("not-real"), json.RawMessage(`{}`))
+	if err := protocol.NewEncoder(conn).Encode(request); err != nil {
+		t.Fatalf("Encode(request) returned error: %v", err)
+	}
+	response, err := protocol.NewDecoder(conn).Decode()
+	if err != nil {
+		t.Fatalf("Decode(response) returned error: %v", err)
+	}
+	if response.Type != protocol.MessageError || response.MessageID != request.MessageID {
+		t.Fatalf("response = %#v, want correlated error", response)
+	}
+	var payload protocol.ErrorPayload
+	if err := json.Unmarshal(response.Payload, &payload); err != nil {
+		t.Fatalf("decode error payload: %v", err)
+	}
+	if payload.Code != "unsupported-message-type" || payload.Category != protocol.ErrorCategoryProtocol || payload.Retryable {
+		t.Fatalf("error payload = %#v, want canonical unsupported-message-type", payload)
+	}
+}
+
 func TestServerDispatchesNodesQueryOverSocket(t *testing.T) {
 	socketDir := filepath.Join(t.TempDir(), "ipc")
 	socketPath := filepath.Join(socketDir, "cockpit-slurm.sock")

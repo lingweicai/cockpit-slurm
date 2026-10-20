@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/lingweicai/cockpit-slurm/internal/connection"
+	"github.com/lingweicai/cockpit-slurm/internal/dispatcher"
 	"github.com/lingweicai/cockpit-slurm/internal/protocol"
 	"github.com/lingweicai/cockpit-slurm/internal/resource"
 	"github.com/lingweicai/cockpit-slurm/internal/stream"
@@ -23,6 +26,16 @@ type transportCommandHandler struct{}
 
 func (transportCommandHandler) Handle(_ context.Context, message protocol.Envelope) protocol.Envelope {
 	return protocol.NewEnvelope(message.MessageID, protocol.MessageCommandResponse, json.RawMessage(`{"result":"transport-test"}`))
+}
+
+type capabilityResolverForIPC struct {
+	requester chan connection.UserContext
+}
+
+func (r *capabilityResolverForIPC) Resolve(_ context.Context, requester connection.UserContext) (connection.UserContext, error) {
+	r.requester <- requester
+	requester.Capabilities = map[string]bool{"nodes.drain": true, "nodes.resume": true}
+	return requester, nil
 }
 
 func (a *mutableNodeAdapter) ListNodes(context.Context) ([]resource.Node, error) {
@@ -189,6 +202,144 @@ func TestNodeStreamConnectionDispatchesWhilePublishingEvents(t *testing.T) {
 	}
 	if !gotCommandResponse || !gotChanges {
 		t.Fatalf("received command response=%t changes=%t, want both", gotCommandResponse, gotChanges)
+	}
+}
+
+func TestCapabilitiesRequestUsesPeerIdentityOverIPC(t *testing.T) {
+	cache := resource.NewNodeCache()
+	cache.ReplaceSnapshot([]resource.Node{resource.NewNode("node001", 0)})
+	registry, err := stream.NewNodeStreamRegistry(cache, stream.DefaultNodeStreamQueueSize)
+	if err != nil {
+		t.Fatalf("NewNodeStreamRegistry returned error: %v", err)
+	}
+	resolver := &capabilityResolverForIPC{requester: make(chan connection.UserContext, 1)}
+	messageDispatcher := dispatcher.NewDispatcherWithCacheAndCapabilities(cache, resolver)
+	socketPath := filepath.Join(t.TempDir(), "cockpit-slurm.sock")
+	server := NewServerWithNodeStreamsAndDispatcher(socketPath, registry, messageDispatcher)
+	if err := server.Listen(); err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = server.Serve(ctx) }()
+
+	client, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Dial returned error: %v", err)
+	}
+	defer client.Close()
+	if err := client.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set client deadline: %v", err)
+	}
+	decoder := protocol.NewDecoder(client)
+	if _, err := decoder.Decode(); err != nil {
+		t.Fatalf("decode initial Node snapshot: %v", err)
+	}
+	request := protocol.NewEnvelope("CAP-IPC-1", protocol.MessageCapabilitiesRequest, json.RawMessage(`{}`))
+	if err := protocol.NewEncoder(client).Encode(request); err != nil {
+		t.Fatalf("encode capabilities request: %v", err)
+	}
+	response, err := decoder.Decode()
+	if err != nil {
+		t.Fatalf("decode capabilities response: %v", err)
+	}
+	if response.Type != protocol.MessageCapabilitiesResponse || response.MessageID != request.MessageID {
+		t.Fatalf("response = %#v, want correlated capabilities response", response)
+	}
+	resolved, err := protocol.DecodeCapabilitiesResponsePayload(response.Payload)
+	if err != nil || !resolved.Capabilities.NodesDrain || !resolved.Capabilities.NodesResume {
+		t.Fatalf("capability payload = %#v, err = %v", resolved, err)
+	}
+	select {
+	case requester := <-resolver.requester:
+		if requester.UID != uint32(os.Getuid()) || requester.GID != uint32(os.Getgid()) || requester.Username == "" {
+			t.Fatalf("resolver requester = %#v, want peer uid=%d gid=%d with username", requester, os.Getuid(), os.Getgid())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("resolver was not called")
+	}
+}
+
+func TestConcurrentCapabilitiesRequestsPreserveCorrelation(t *testing.T) {
+	cache := resource.NewNodeCache()
+	cache.ReplaceSnapshot([]resource.Node{resource.NewNode("node001", 0)})
+	registry, err := stream.NewNodeStreamRegistry(cache, stream.DefaultNodeStreamQueueSize)
+	if err != nil {
+		t.Fatalf("NewNodeStreamRegistry returned error: %v", err)
+	}
+	resolver := &capabilityResolverForIPC{requester: make(chan connection.UserContext, 2)}
+	messageDispatcher := dispatcher.NewDispatcherWithCacheAndCapabilities(cache, resolver)
+	socketPath := filepath.Join(t.TempDir(), "cockpit-slurm.sock")
+	server := NewServerWithNodeStreamsAndDispatcher(socketPath, registry, messageDispatcher)
+	if err := server.Listen(); err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = server.Serve(ctx) }()
+
+	client, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Dial returned error: %v", err)
+	}
+	defer client.Close()
+	if err := client.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set client deadline: %v", err)
+	}
+	decoder := protocol.NewDecoder(client)
+	if _, err := decoder.Decode(); err != nil {
+		t.Fatalf("decode initial Node snapshot: %v", err)
+	}
+	requests := []protocol.Envelope{
+		protocol.NewEnvelope("CAP-CONCURRENT-1", protocol.MessageCapabilitiesRequest, json.RawMessage(`{}`)),
+		protocol.NewEnvelope("CAP-CONCURRENT-2", protocol.MessageCapabilitiesRequest, json.RawMessage(`{}`)),
+	}
+	encoder := protocol.NewEncoder(client)
+	for _, request := range requests {
+		if err := encoder.Encode(request); err != nil {
+			t.Fatalf("encode capabilities request %q: %v", request.MessageID, err)
+		}
+	}
+
+	got := make(map[string]bool, len(requests))
+	for range len(requests) {
+		response, err := decoder.Decode()
+		if err != nil {
+			t.Fatalf("decode capabilities response: %v", err)
+		}
+		if response.Type != protocol.MessageCapabilitiesResponse {
+			t.Fatalf("response type = %q, want capabilities-response", response.Type)
+		}
+		if response.MessageID != requests[0].MessageID && response.MessageID != requests[1].MessageID {
+			t.Fatalf("unexpected response messageId %q", response.MessageID)
+		}
+		if got[response.MessageID] {
+			t.Fatalf("duplicate response messageId %q", response.MessageID)
+		}
+		capabilities, err := protocol.DecodeCapabilitiesResponsePayload(response.Payload)
+		if err != nil || !capabilities.Capabilities.NodesDrain || !capabilities.Capabilities.NodesResume {
+			t.Fatalf("response %q capabilities=%#v err=%v", response.MessageID, capabilities, err)
+		}
+		got[response.MessageID] = true
+	}
+	for _, request := range requests {
+		if !got[request.MessageID] {
+			t.Errorf("no correlated response for %q", request.MessageID)
+		}
+	}
+	for range len(requests) {
+		select {
+		case requester := <-resolver.requester:
+			if requester.UID != uint32(os.Getuid()) || requester.GID != uint32(os.Getgid()) || requester.Username == "" {
+				t.Fatalf("resolver requester = %#v, want server-derived peer identity", requester)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("resolver did not receive both capability requests")
+		}
 	}
 }
 
