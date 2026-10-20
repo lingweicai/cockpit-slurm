@@ -146,6 +146,34 @@ func TestAuthorizerUsesFreshCapabilitiesAndNeverFallsBackToSnapshot(t *testing.T
 	}
 }
 
+func TestAuthorizerChecksTheCapabilityDeclaredForEachOperation(t *testing.T) {
+	registry, err := NewNodeRegistry()
+	if err != nil {
+		t.Fatalf("NewNodeRegistry() returned error: %v", err)
+	}
+	resolver := &stubCapabilityResolver{results: []connection.UserContext{{
+		UID:        1008,
+		GID:        978,
+		Username:   "slurm_admin",
+		AdminLevel: "admin",
+		Capabilities: map[string]bool{
+			identity.CapabilityNodeDrain:  true,
+			identity.CapabilityNodeResume: false,
+		},
+	}}}
+	authorizer := NewAuthorizer(registry, resolver)
+	requester := connection.UserContext{UID: 1008, GID: 978, Username: "slurm_admin"}
+
+	drain, err := authorizer.Authorize(context.Background(), requester, OperationNodeDrain)
+	if err != nil || !drain.Allowed || drain.RequiredCapability != identity.CapabilityNodeDrain {
+		t.Fatalf("drain decision = %#v, err = %v; want nodes.drain allowed", drain, err)
+	}
+	resume, err := authorizer.Authorize(context.Background(), requester, OperationNodeResume)
+	if err != nil || resume.Allowed || resume.RequiredCapability != identity.CapabilityNodeResume {
+		t.Fatalf("resume decision = %#v, err = %v; want nodes.resume denied", resume, err)
+	}
+}
+
 func TestAuthorizerFailsClosedOnUnknownOperationAndResolverFailure(t *testing.T) {
 	registry, err := NewNodeRegistry()
 	if err != nil {
