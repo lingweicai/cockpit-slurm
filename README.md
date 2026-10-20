@@ -71,6 +71,13 @@ that this account can read user, association, and coordinator records. Lookup
 failures return `capability-unavailable`; they never grant capabilities by
 default.
 
+The Phase 5 command ledger uses pure-Go SQLite at
+`/var/lib/cockpit-slurm/commands.db`. The service unit creates this persistent
+state directory with mode `0750`; the database and SQLite WAL/shared-memory
+files use restrictive permissions. The ledger uses WAL journaling and full
+synchronous durability, and an unavailable or inconsistent ledger prevents
+command admission rather than falling back to memory.
+
 ## Install for development user
 
 For development, you usually want to run your module straight out of the git

@@ -10,6 +10,7 @@ import (
 	"github.com/lingweicai/cockpit-slurm/internal/dispatcher"
 	"github.com/lingweicai/cockpit-slurm/internal/identity"
 	"github.com/lingweicai/cockpit-slurm/internal/ipc"
+	"github.com/lingweicai/cockpit-slurm/internal/ledger"
 	"github.com/lingweicai/cockpit-slurm/internal/resource"
 	"github.com/lingweicai/cockpit-slurm/internal/stream"
 )
@@ -19,6 +20,12 @@ func main() {
 	defer stop()
 
 	cache := resource.NewNodeCache()
+	commandLedger, err := ledger.Open(ledger.DefaultPath)
+	if err != nil {
+		log.Fatalf("initialize command ledger: %v", err)
+	}
+	defer commandLedger.Close()
+
 	adapter := resource.NewSlurmNodeAdapter()
 	streams, err := stream.NewNodeStreamRegistry(cache, stream.DefaultNodeStreamQueueSize)
 	if err != nil {
