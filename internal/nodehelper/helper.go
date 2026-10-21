@@ -20,6 +20,7 @@ const (
 	ObjectPath          = dbus.ObjectPath("/org/cockpit_project/CockpitSlurm/NodeMutation")
 	Interface           = "org.cockpit_project.CockpitSlurm.NodeMutation"
 	ServiceAccount      = "cockpit-slurm"
+	SlurmAccount        = "slurm"
 	ScontrolPath        = "/usr/bin/scontrol"
 	OperationNodeDrain  = "node.drain"
 	OperationNodeResume = "node.resume"
@@ -152,24 +153,32 @@ func (r busPeerUIDResolver) UID(ctx context.Context, sender string) (uint32, err
 }
 
 func Run(ctx context.Context) error {
-	if os.Geteuid() != 0 {
-		return errors.New("Node mutation helper must run as root")
-	}
 	serviceUser, err := user.Lookup(ServiceAccount)
 	if err != nil {
-		return fmt.Errorf("resolve service account: %w", err)
+		return fmt.Errorf("resolve requesting service account: %w", err)
 	}
 	serviceUID, err := strconv.ParseUint(serviceUser.Uid, 10, 32)
 	if err != nil {
-		return fmt.Errorf("parse service account UID: %w", err)
+		return fmt.Errorf("parse requesting service account UID: %w", err)
+	}
+	slurmUser, err := user.Lookup(SlurmAccount)
+	if err != nil {
+		return fmt.Errorf("resolve Slurm execution account: %w", err)
+	}
+	slurmUID, err := strconv.ParseUint(slurmUser.Uid, 10, 32)
+	if err != nil {
+		return fmt.Errorf("parse Slurm execution account UID: %w", err)
+	}
+	if uint64(os.Geteuid()) != slurmUID {
+		return fmt.Errorf("Node mutation helper must run as SlurmUser %q (UID %d)", SlurmAccount, slurmUID)
 	}
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
 		return fmt.Errorf("connect to system D-Bus: %w", err)
 	}
 	defer conn.Close()
-	service := NewDBusService(uint32(serviceUID), busPeerUIDResolver{conn: conn}, nil)
-	if err := conn.Export(service, ObjectPath, Interface); err != nil {
+	helperService := NewDBusService(uint32(serviceUID), busPeerUIDResolver{conn: conn}, nil)
+	if err := conn.Export(helperService, ObjectPath, Interface); err != nil {
 		return fmt.Errorf("export Node mutation helper: %w", err)
 	}
 	requestName, err := conn.RequestName(BusName, dbus.NameFlagDoNotQueue)

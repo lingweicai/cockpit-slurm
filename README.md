@@ -79,9 +79,11 @@ synchronous durability, and an unavailable or inconsistent ledger prevents
 command admission rather than falling back to memory.
 
 The optional Node mutation boundary is packaged as a separately activated
-root D-Bus helper. Its bus policy permits calls only from the `cockpit-slurm`
-service account, and the helper independently validates the caller UID and
-only supports fixed Node drain/resume operations. Packaging this helper does
+D-Bus helper. Its executable and unit are root-owned, but the helper process
+and its fixed `scontrol` child run as Slurm's configured `SlurmUser` (currently
+`slurm`). The bus policy permits method calls only from the `cockpit-slurm`
+service user, and the helper independently verifies that caller UID and
+accepts only fixed Node drain/resume operations. Packaging the helper does
 not enable a mutation endpoint; backend command orchestration and the Stage C
 execution-identity acceptance gate must pass before it is invoked.
 

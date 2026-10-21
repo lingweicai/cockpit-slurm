@@ -11,7 +11,7 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
-func TestDBusPolicyAllowsOnlyTheDaemonUser(t *testing.T) {
+func TestDBusPolicyScopesCallsAndHelperRunsAsSlurmUser(t *testing.T) {
 	policy, err := os.ReadFile("../../packaging/org.cockpit_project.CockpitSlurm.NodeMutation.conf")
 	if err != nil {
 		t.Fatalf("read helper D-Bus policy: %v", err)
@@ -20,11 +20,21 @@ func TestDBusPolicyAllowsOnlyTheDaemonUser(t *testing.T) {
 	if !strings.Contains(text, `<policy user="cockpit-slurm">`) {
 		t.Fatal("D-Bus policy does not grant access to the daemon user")
 	}
+	if !strings.Contains(text, `<policy user="slurm">`) || !strings.Contains(text, `<allow own="org.cockpit_project.CockpitSlurm.NodeMutation"/>`) {
+		t.Fatal("D-Bus policy does not assign service ownership to SlurmUser")
+	}
 	if strings.Contains(text, `<policy group="cockpit-slurm">`) {
 		t.Fatal("D-Bus policy grants helper access to all socket-group members")
 	}
 	if !strings.Contains(text, `<deny send_destination="org.cockpit_project.CockpitSlurm.NodeMutation"/>`) {
 		t.Fatal("D-Bus policy does not deny helper calls by default")
+	}
+	unit, err := os.ReadFile("../../packaging/cockpit-slurm-node-helper.service.in")
+	if err != nil {
+		t.Fatalf("read helper systemd unit: %v", err)
+	}
+	if !strings.Contains(string(unit), "User=slurm\nGroup=slurm\n") {
+		t.Fatal("helper systemd unit does not execute as SlurmUser")
 	}
 }
 

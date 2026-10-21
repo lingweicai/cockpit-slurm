@@ -6,8 +6,8 @@ Requires=dbus.service
 [Service]
 Type=dbus
 BusName=org.cockpit_project.CockpitSlurm.NodeMutation
-User=root
-Group=root
+User=slurm
+Group=slurm
 ExecStart=@LIBEXECDIR@/cockpit-slurm-node-helper
 Restart=on-failure
 NoNewPrivileges=true
