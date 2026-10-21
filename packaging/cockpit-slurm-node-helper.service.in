@@ -1,0 +1,19 @@
+[Unit]
+Description=Cockpit Slurm restricted Node mutation helper
+After=dbus.service
+Requires=dbus.service
+
+[Service]
+Type=dbus
+BusName=org.cockpit_project.CockpitSlurm.NodeMutation
+User=root
+Group=root
+ExecStart=@LIBEXECDIR@/cockpit-slurm-node-helper
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -78,6 +78,13 @@ files use restrictive permissions. The ledger uses WAL journaling and full
 synchronous durability, and an unavailable or inconsistent ledger prevents
 command admission rather than falling back to memory.
 
+The optional Node mutation boundary is packaged as a separately activated
+root D-Bus helper. Its bus policy permits calls only from the `cockpit-slurm`
+service account, and the helper independently validates the caller UID and
+only supports fixed Node drain/resume operations. Packaging this helper does
+not enable a mutation endpoint; backend command orchestration and the Stage C
+execution-identity acceptance gate must pass before it is invoked.
+
 ## Install for development user
 
 For development, you usually want to run your module straight out of the git

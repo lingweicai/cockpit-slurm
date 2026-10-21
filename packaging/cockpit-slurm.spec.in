@@ -58,7 +58,7 @@ NODE_ENV=production NODE_PATH=/usr/lib/node_modules:$(echo /usr/lib/node_modules
 
 
 %install
-%make_install PREFIX=/usr
+%make_install PREFIX=/usr SYSTEMD_UNIT_DIR=%{_unitdir}
 
 # drop source maps, they are large and just for debugging
 find %{buildroot}%{_datadir}/cockpit/ -name '*.map' | xargs --no-run-if-empty rm --verbose
@@ -75,5 +75,10 @@ appstream-util validate-relax --nonet %{buildroot}/%{_datadir}/metainfo/*
 %{_datadir}/cockpit/*
 %{_datadir}/metainfo/*
 %{_libexecdir}/cockpit-slurm/cockpit-slurm-channel
+%{_libexecdir}/cockpit-slurm-node-helper
+%{_datadir}/dbus-1/system-services/org.cockpit_project.CockpitSlurm.NodeMutation.service
+%config(noreplace) %{_sysconfdir}/dbus-1/system.d/org.cockpit_project.CockpitSlurm.NodeMutation.conf
+%{_unitdir}/cockpit-slurm.service
+%{_unitdir}/cockpit-slurm-node-helper.service
 
 %changelog

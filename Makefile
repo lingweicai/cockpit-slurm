@@ -22,12 +22,15 @@ NODE_MODULES_TEST=package-lock.json
 # build.js ran in non-watch mode
 DIST_TEST=runtime-npm-modules.txt
 APP_BINARY=cmd/cockpit-slurm/cockpit-slurm
+HELPER_BINARY=cmd/cockpit-slurm-node-helper/cockpit-slurm-node-helper
+LIBEXECDIR ?= $(PREFIX)/libexec
+SYSTEMD_UNIT_DIR ?= /etc/systemd/system
 # one example file in pkg/lib to check if it was already checked out
 COCKPIT_REPO_STAMP=pkg/lib/cockpit-po-plugin.js
 # common arguments for tar, mostly to make the generated tarballs reproducible
 TAR_ARGS = --sort=name --mtime "@$(shell git show --no-patch --format='%at')" --mode=go=rX,u+rw,a-s --numeric-owner --owner=0 --group=0
 
-all: $(DIST_TEST) $(APP_BINARY)
+all: $(DIST_TEST) $(APP_BINARY) $(HELPER_BINARY)
 
 # checkout common files from Cockpit repository required to build this project;
 # this has no API stability guarantee, so check out a stable tag when you start
@@ -97,6 +100,9 @@ $(DIST_TEST): $(NODE_MODULES_TEST) $(COCKPIT_REPO_STAMP) $(shell find src/ -type
 $(APP_BINARY): $(shell find cmd/cockpit-slurm -name '*.go' -o -name 'go.mod' -o -name 'go.sum')
 	go build -o $(abspath $(APP_BINARY)) ./cmd/cockpit-slurm
 
+$(HELPER_BINARY): $(shell find cmd/cockpit-slurm-node-helper -name '*.go' -o -name 'go.mod' -o -name 'go.sum')
+	go build -o $(abspath $(HELPER_BINARY)) ./cmd/cockpit-slurm-node-helper
+
 watch: $(NODE_MODULES_TEST) $(COCKPIT_REPO_STAMP)
 	NODE_ENV=$(NODE_ENV) ./build.js --watch
 
@@ -105,9 +111,9 @@ clean:
 	rm -f $(SPEC) packaging/arch/PKGBUILD
 	rm -f po/LINGUAS
 	rm -f metafile.json runtime-npm-modules.txt
-	rm -f $(APP_BINARY)
+	rm -f $(APP_BINARY) $(HELPER_BINARY)
 
-install: $(DIST_TEST) po/LINGUAS $(APP_BINARY)
+install: $(DIST_TEST) po/LINGUAS $(APP_BINARY) $(HELPER_BINARY)
 	mkdir -p $(DESTDIR)$(PREFIX)/share/cockpit/$(PACKAGE_NAME)
 	cp -r dist/* $(DESTDIR)$(PREFIX)/share/cockpit/$(PACKAGE_NAME)
 	mkdir -p $(DESTDIR)$(PREFIX)/share/metainfo/
@@ -116,14 +122,25 @@ install: $(DIST_TEST) po/LINGUAS $(APP_BINARY)
 		-o $(DESTDIR)$(PREFIX)/share/metainfo/$(APPSTREAMFILE)
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	install -m 755 $(APP_BINARY) $(DESTDIR)$(PREFIX)/bin/
-	mkdir -p $(DESTDIR)/etc/systemd/system
-	install -m 644 packaging/cockpit-slurm.service $(DESTDIR)/etc/systemd/system/cockpit-slurm.service
+	mkdir -p $(DESTDIR)$(LIBEXECDIR)
+	install -m 755 $(HELPER_BINARY) $(DESTDIR)$(LIBEXECDIR)/cockpit-slurm-node-helper
+	mkdir -p $(DESTDIR)$(PREFIX)/share/dbus-1/system-services
+	sed 's|@LIBEXECDIR@|$(LIBEXECDIR)|g' packaging/org.cockpit_project.CockpitSlurm.NodeMutation.service.in > $(DESTDIR)$(PREFIX)/share/dbus-1/system-services/org.cockpit_project.CockpitSlurm.NodeMutation.service
+	mkdir -p $(DESTDIR)/etc/dbus-1/system.d
+	install -m 644 packaging/org.cockpit_project.CockpitSlurm.NodeMutation.conf $(DESTDIR)/etc/dbus-1/system.d/
+	mkdir -p $(DESTDIR)$(SYSTEMD_UNIT_DIR)
+	sed 's|/usr/local/bin/cockpit-slurm|$(PREFIX)/bin/cockpit-slurm|' packaging/cockpit-slurm.service > $(DESTDIR)$(SYSTEMD_UNIT_DIR)/cockpit-slurm.service
+	sed 's|@LIBEXECDIR@|$(LIBEXECDIR)|g' packaging/cockpit-slurm-node-helper.service.in > $(DESTDIR)$(SYSTEMD_UNIT_DIR)/cockpit-slurm-node-helper.service
 
 uninstall:
 	rm -rf $(DESTDIR)$(PREFIX)/share/cockpit/$(PACKAGE_NAME)
 	rm -f $(DESTDIR)$(PREFIX)/share/metainfo/$(APPSTREAMFILE)
 	rm -f $(DESTDIR)$(PREFIX)/bin/cockpit-slurm
-	rm -f $(DESTDIR)/etc/systemd/system/cockpit-slurm.service
+	rm -f $(DESTDIR)$(LIBEXECDIR)/cockpit-slurm-node-helper
+	rm -f $(DESTDIR)$(PREFIX)/share/dbus-1/system-services/org.cockpit_project.CockpitSlurm.NodeMutation.service
+	rm -f $(DESTDIR)/etc/dbus-1/system.d/org.cockpit_project.CockpitSlurm.NodeMutation.conf
+	rm -f $(DESTDIR)$(SYSTEMD_UNIT_DIR)/cockpit-slurm.service
+	rm -f $(DESTDIR)$(SYSTEMD_UNIT_DIR)/cockpit-slurm-node-helper.service
 
 # this requires a built source tree and avoids having to install anything system-wide
 devel-install: $(DIST_TEST) $(APP_BINARY)

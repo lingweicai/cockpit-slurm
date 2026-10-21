@@ -18,6 +18,7 @@ Date recorded: 2026-10-20.
 - Latest install verification: `/usr/local/bin/cockpit-slurm` modified at 12:05:36 CST; systemd launched PID 26663 at 12:05:48 CST and reported it active. The ledger files retained the expected service ownership and modes.
 - Follow-up on 2026-10-20: systemd still reports PID 26663 active with `StateDirectory=cockpit-slurm`, `StateDirectoryMode=0750`, `ProtectSystem=strict`, and `NoNewPrivileges=yes`.
 - Read-only Slurm snapshots reported `c21`-`c24` as `IDLE`; `squeue -w c21,c22,c23,c24` returned no jobs. No node was identified as the dedicated mutation-test node, and no drain/resume was issued.
+- The operator subsequently designated `c21` as the test node. Direct drain and resume attempts as `cockpit-slurm` both returned `slurm_update error: Invalid user id`; read-only checks showed c21 remained `IDLE`, and no jobs were allocated. Direct service-account execution therefore failed and is not approved.
 - A read-only SQLite status query as `cockpit-slurm` could not be run because `sudo -n` required a password. Ledger contents after restart and recovery of a seeded interrupted record remain unverified.
 
 ## Verification
@@ -33,7 +34,10 @@ Date recorded: 2026-10-20.
 - Tests cover reopen persistence, startup quarantine (`authorization_pending`/`accepted` → `authorization_uncertain`, `running` → `unknown`), denied tombstone immutability, schema-version rejection, corrupt database rejection, expiry behavior, independent-handle claim races, and database lock timeout/reconciliation.
 - Commit-before-error and true pre-commit fault injection cover claims, accepted/running intent, denial tombstones, and authorization-failure tombstones. Reconciliation checkpoints WAL and only reopens admission after integrity and unresolved-state checks pass.
 - Restart confirmed the daemon starts with the ledger present and correct filesystem ownership/modes, but persistent record recovery still needs a seeded interrupted-record restart test under the production unit.
-- Direct `scontrol` execution as `cockpit-slurm` has not been tested on a designated dedicated node. No restricted helper is installed, so the execution-identity gate is open.
+- Direct execution failed on the approved test node: both `sudo -u cockpit-slurm /usr/bin/scontrol update NodeName=c21 State=DRAIN Reason=phase5-direct-execution-test` and `... State=RESUME` returned `slurm_update error: Invalid user id`; c21 remained `IDLE` and `squeue` showed no jobs.
+- Added a root system-D-Bus helper, bus policy scoped to the `cockpit-slurm` user, fixed `/usr/bin/scontrol` argument mapping, sender-UID enforcement, and positive/negative tests for both operations, invalid operations/targets/reasons, shell input, missing/unauthorized D-Bus sender, and execution failure. The full Go suite, helper race tests, and `go vet ./...` pass; policy XML parses and the staged install plan includes the helper artifacts.
+- Latest host check confirms `/usr/local/libexec/cockpit-slurm-node-helper` is installed root-owned mode `0755`, its system-bus activation name is listed, and `cockpit-slurm-node-helper.service` is active. A `dev` caller (UID 1002, member of the socket group but not the service user) received D-Bus `AccessDenied`; no `scontrol update` process ran and c21 remained `IDLE`.
+- A fresh read-only check shows c21 `IDLE` with no allocated jobs. Positive helper drain/resume, verification of DRAIN/RESUME results, and restoration to the original state remain pending. The helper is not wired to the Command Service. Stage D remains gated.
 - No Command Service consumes the ledger yet, so absence of unintended execution or duplicate mutations across restart has not been exercised. Command execution remains gated.
 
 No mutation endpoint or execution is enabled. Stage C is not passed.
