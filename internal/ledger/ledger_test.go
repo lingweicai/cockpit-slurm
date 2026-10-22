@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -76,10 +77,35 @@ func TestOpenInitializesVersionedDurableLedger(t *testing.T) {
 }
 
 func TestOpenRecoversInterruptedCommandsWithoutReexecution(t *testing.T) {
+	if seedPath := os.Getenv("COCKPIT_SLURM_LEDGER_SEED_PATH"); seedPath != "" {
+		seedInterruptedCommands(t, seedPath)
+		return
+	}
+
+	if recoveryPath := os.Getenv("COCKPIT_SLURM_LEDGER_RECOVERY_TEST_PATH"); recoveryPath != "" {
+		assertRecoveredInterruptedCommands(t, recoveryPath)
+		return
+	}
+
 	path := filepath.Join(t.TempDir(), "commands.db")
+	seedInterruptedCommands(t, path)
+
+	command := exec.Command(os.Args[0], "-test.run=^TestOpenRecoversInterruptedCommandsWithoutReexecution$")
+	command.Env = append(os.Environ(), "COCKPIT_SLURM_LEDGER_RECOVERY_TEST_PATH="+path)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("recovery subprocess failed: %v\n%s", err, output)
+	}
+	if len(output) == 0 {
+		t.Fatal("recovery subprocess produced no test output")
+	}
+}
+
+func seedInterruptedCommands(t *testing.T, path string) {
+	t.Helper()
 	ledger, err := Open(path)
 	if err != nil {
-		t.Fatalf("Open() returned error: %v", err)
+		t.Fatalf("open ledger to seed interrupted commands: %v", err)
 	}
 	for index, status := range []string{"authorization_pending", "accepted", "running", "succeeded"} {
 		commandID := string(rune('a' + index))
@@ -95,9 +121,12 @@ INSERT INTO commands (
 		}
 	}
 	if err := ledger.Close(); err != nil {
-		t.Fatalf("Close() returned error: %v", err)
+		t.Fatalf("close seeded ledger: %v", err)
 	}
+}
 
+func assertRecoveredInterruptedCommands(t *testing.T, path string) {
+	t.Helper()
 	reopened, err := Open(path)
 	if err != nil {
 		t.Fatalf("reopen ledger: %v", err)
