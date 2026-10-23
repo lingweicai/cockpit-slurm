@@ -335,7 +335,7 @@ func TestCommandLifecycleTransitionsAreDurableAndRestricted(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("Lookup() found=%t err=%v", found, err)
 	}
-	if record.Status != StatusSucceeded || record.AdminLevel != "admin" || record.ExecutionUID == nil || *record.ExecutionUID != executionUID || record.ExecutionUsername != "cockpit-slurm" || record.ExecutionBoundary != "direct-service-account" || string(record.AuthorizationMetadata) != string(metadata) || string(record.ResultPayload) != string(result) {
+	if record.Status != StatusSucceeded || record.CallerUID != claim.CallerUID || record.RequestingUsername != claim.RequestingUsername || record.RequestingGID != claim.RequestingGID || record.RequestMessageID != claim.RequestMessageID || record.ServiceUID != claim.ServiceUID || record.ServiceUsername != claim.ServiceUsername || record.AdminLevel != "admin" || record.ExecutionUID == nil || *record.ExecutionUID != executionUID || record.ExecutionUsername != "cockpit-slurm" || record.ExecutionBoundary != "direct-service-account" || string(record.AuthorizationMetadata) != string(metadata) || string(record.ResultPayload) != string(result) {
 		t.Fatalf("recovered record = %#v", record)
 	}
 	if err := reopened.Transition(t.Context(), 1008, "cmd-2", StatusSucceeded, StatusAccepted, TransitionData{}); !errors.Is(err, ErrInvalidTransition) {
