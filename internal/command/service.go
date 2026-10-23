@@ -102,7 +102,7 @@ func (s *Service) Handle(ctx context.Context, requester connection.UserContext, 
 		return s.errorEnvelope(message, protocol.ErrorCodeIdentityUnavailable, protocol.ErrorCategoryAuthentication, "Unable to determine the authenticated user", false, request.CommandID)
 	}
 	if s.ledger.AdmissionBlocked() {
-		return s.persistenceError(message, request.CommandID)
+		return s.persistenceError(message, request.CommandID, ledger.ErrAdmissionBlocked)
 	}
 
 	canonicalPayload, err := json.Marshal(request)
@@ -115,7 +115,7 @@ func (s *Service) Handle(ctx context.Context, requester connection.UserContext, 
 
 	record, found, err := s.ledger.Lookup(ctx, requester.UID, request.CommandID)
 	if err != nil {
-		return s.persistenceError(message, request.CommandID)
+		return s.persistenceError(message, request.CommandID, err)
 	}
 	if found {
 		if !equalFingerprint(record.RequestFingerprint, fingerprint[:]) {
@@ -171,7 +171,7 @@ func (s *Service) Handle(ctx context.Context, requester connection.UserContext, 
 		if errors.Is(err, ledger.ErrCommandIDConflict) {
 			return s.errorEnvelope(message, protocol.ErrorCodeCommandIDConflict, protocol.ErrorCategoryConflict, "Command ID was already used for a different request", false, request.CommandID)
 		}
-		return s.persistenceError(message, request.CommandID)
+		return s.persistenceError(message, request.CommandID, err)
 	}
 	if !created {
 		return s.awaitRecord(ctx, message, record, fingerprint[:])
@@ -181,7 +181,7 @@ func (s *Service) Handle(ctx context.Context, requester connection.UserContext, 
 	if err != nil {
 		failure := s.errorPayload(protocol.ErrorCodeUserLookupFailed, protocol.ErrorCategoryInternal, "Slurm user information is temporarily unavailable", true, request.CommandID)
 		if transitionErr := s.ledger.Transition(ctx, requester.UID, request.CommandID, ledger.StatusAuthorizationPending, ledger.StatusAuthorizationFailed, ledger.TransitionData{ErrorPayload: marshalPayload(failure)}); transitionErr != nil {
-			return s.persistenceError(message, request.CommandID)
+			return s.persistenceError(message, request.CommandID, transitionErr)
 		}
 		return protocol.NewErrorEnvelope(message.MessageID, failure)
 	}
@@ -193,7 +193,7 @@ func (s *Service) Handle(ctx context.Context, requester connection.UserContext, 
 	if !decision.Allowed {
 		denied := s.errorPayload(protocol.ErrorCodeAuthorizationDenied, protocol.ErrorCategoryAuthorization, "Not authorized to perform this Node operation", false, request.CommandID)
 		if err := s.ledger.Transition(ctx, requester.UID, request.CommandID, ledger.StatusAuthorizationPending, ledger.StatusDenied, ledger.TransitionData{ErrorPayload: marshalPayload(denied)}); err != nil {
-			return s.persistenceError(message, request.CommandID)
+			return s.persistenceError(message, request.CommandID, err)
 		}
 		return protocol.NewErrorEnvelope(message.MessageID, denied)
 	}
@@ -209,7 +209,7 @@ func (s *Service) Handle(ctx context.Context, requester connection.UserContext, 
 		AdminLevel:            decision.UserContext.AdminLevel,
 		AuthorizationMetadata: authorizationMetadata,
 	}); err != nil {
-		return s.persistenceError(message, request.CommandID)
+		return s.persistenceError(message, request.CommandID, err)
 	}
 
 	if err := s.ledger.Transition(ctx, requester.UID, request.CommandID, ledger.StatusAccepted, ledger.StatusRunning, ledger.TransitionData{
@@ -217,7 +217,7 @@ func (s *Service) Handle(ctx context.Context, requester connection.UserContext, 
 		ExecutionUsername: executionIdentity.Username,
 		ExecutionBoundary: executionIdentity.Boundary,
 	}); err != nil {
-		return s.persistenceError(message, request.CommandID)
+		return s.persistenceError(message, request.CommandID, err)
 	}
 
 	if err := s.executor.Execute(ctx, operationID, request.Target.NodeName, reason); err != nil {
@@ -229,7 +229,7 @@ func (s *Service) Handle(ctx context.Context, requester connection.UserContext, 
 		}
 		failure := s.errorPayload(code, category, detail, false, request.CommandID)
 		if transitionErr := s.ledger.Transition(ctx, requester.UID, request.CommandID, ledger.StatusRunning, status, ledger.TransitionData{ErrorPayload: marshalPayload(failure)}); transitionErr != nil {
-			return s.persistenceError(message, request.CommandID)
+			return s.persistenceError(message, request.CommandID, transitionErr)
 		}
 		if status == ledger.StatusUnknown {
 			s.requestNodeRefresh(ctx)
@@ -247,7 +247,7 @@ func (s *Service) Handle(ctx context.Context, requester connection.UserContext, 
 	}
 	result := marshalPayload(response)
 	if err := s.ledger.Transition(ctx, requester.UID, request.CommandID, ledger.StatusRunning, ledger.StatusSucceeded, ledger.TransitionData{ResultPayload: result}); err != nil {
-		return s.persistenceError(message, request.CommandID)
+		return s.persistenceError(message, request.CommandID, err)
 	}
 	s.requestNodeRefresh(ctx)
 	return protocol.NewEnvelope(message.MessageID, protocol.MessageCommandResponse, result)
@@ -317,7 +317,7 @@ func validateAgainstRegistry(entry authorization.RegistryEntry, request protocol
 func (s *Service) authorizationFailure(ctx context.Context, message protocol.Envelope, uid uint32, commandID string) protocol.Envelope {
 	failure := s.errorPayload(protocol.ErrorCodeInternal, protocol.ErrorCategoryInternal, "Authorization information is unavailable", true, commandID)
 	if err := s.ledger.Transition(ctx, uid, commandID, ledger.StatusAuthorizationPending, ledger.StatusAuthorizationFailed, ledger.TransitionData{ErrorPayload: marshalPayload(failure)}); err != nil {
-		return s.persistenceError(message, commandID)
+		return s.persistenceError(message, commandID, err)
 	}
 	return protocol.NewErrorEnvelope(message.MessageID, failure)
 }
@@ -350,7 +350,7 @@ func (s *Service) recordResponse(message protocol.Envelope, record ledger.Record
 func (s *Service) awaitRecord(ctx context.Context, message protocol.Envelope, record ledger.Record, fingerprint []byte) protocol.Envelope {
 	for record.Status == ledger.StatusAuthorizationPending || record.Status == ledger.StatusAccepted {
 		if s.ledger.AdmissionBlocked() {
-			return s.persistenceError(message, record.CommandID)
+			return s.persistenceError(message, record.CommandID, ledger.ErrAdmissionBlocked)
 		}
 		timer := time.NewTimer(10 * time.Millisecond)
 		select {
@@ -361,10 +361,10 @@ func (s *Service) awaitRecord(ctx context.Context, message protocol.Envelope, re
 		}
 		updated, found, err := s.ledger.Lookup(ctx, record.CallerUID, record.CommandID)
 		if err != nil {
-			return s.persistenceError(message, record.CommandID)
+			return s.persistenceError(message, record.CommandID, err)
 		}
 		if !found {
-			return s.persistenceError(message, record.CommandID)
+			return s.persistenceError(message, record.CommandID, errors.New("command record disappeared while awaiting completion"))
 		}
 		if !equalFingerprint(updated.RequestFingerprint, fingerprint) {
 			return s.errorEnvelope(message, protocol.ErrorCodeCommandIDConflict, protocol.ErrorCategoryConflict, "Command ID was already used for a different request", false, record.CommandID)
@@ -374,7 +374,11 @@ func (s *Service) awaitRecord(ctx context.Context, message protocol.Envelope, re
 	return s.recordResponse(message, record)
 }
 
-func (s *Service) persistenceError(message protocol.Envelope, commandID string) protocol.Envelope {
+func (s *Service) persistenceError(message protocol.Envelope, commandID string, cause error) protocol.Envelope {
+	if cause == nil {
+		cause = ledger.ErrPersistenceFailed
+	}
+	log.Printf("command ledger persistence failure command_id=%q: %v", commandID, cause)
 	if s.ledger.AdmissionBlocked() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if err := s.ledger.Reconcile(ctx); err != nil {
