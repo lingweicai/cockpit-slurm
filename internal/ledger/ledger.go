@@ -16,7 +16,7 @@ import (
 
 const (
 	DefaultPath   = "/var/lib/cockpit-slurm/commands.db"
-	SchemaVersion = 2
+	SchemaVersion = 3
 	Retention     = 30 * 24 * time.Hour
 )
 
@@ -548,9 +548,48 @@ ALTER TABLE commands ADD COLUMN service_uid INTEGER NOT NULL DEFAULT 0 CHECK (se
 ALTER TABLE commands ADD COLUMN service_username TEXT NOT NULL DEFAULT '';
 		`)
 		return err
+	case 3:
+		if err := ensureColumn(tx, "service_uid", "INTEGER NOT NULL DEFAULT 0 CHECK (service_uid >= 0)"); err != nil {
+			return err
+		}
+		return ensureColumn(tx, "service_username", "TEXT NOT NULL DEFAULT ''")
 	default:
 		return fmt.Errorf("no migration registered for version %d", version)
 	}
+}
+
+func ensureColumn(tx *sql.Tx, column, declaration string) error {
+	rows, err := tx.Query(`PRAGMA table_info(commands)`)
+	if err != nil {
+		return fmt.Errorf("inspect command ledger columns: %w", err)
+	}
+	found := false
+	for rows.Next() {
+		var index, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&index, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("read command ledger column: %w", err)
+		}
+		if name == column {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("read command ledger columns: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close command ledger column query: %w", err)
+	}
+	if found {
+		return nil
+	}
+	if _, err := tx.Exec(fmt.Sprintf("ALTER TABLE commands ADD COLUMN %s %s", column, declaration)); err != nil {
+		return fmt.Errorf("add command ledger column %s: %w", column, err)
+	}
+	return nil
 }
 
 func (l *Ledger) Reconcile(ctx context.Context) error {

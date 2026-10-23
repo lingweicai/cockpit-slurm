@@ -137,6 +137,71 @@ func TestOpenMigratesV1LedgerWithoutLosingRecords(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesV2LedgerMissingServiceIdentityColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commands.db")
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	tx, err := database.Begin()
+	if err != nil {
+		t.Fatalf("begin legacy schema transaction: %v", err)
+	}
+	if err := applyMigration(tx, 1); err != nil {
+		_ = tx.Rollback()
+		_ = database.Close()
+		t.Fatalf("create v1 schema: %v", err)
+	}
+	if _, err := tx.Exec(`
+ALTER TABLE commands ADD COLUMN requesting_gid INTEGER NOT NULL DEFAULT 0 CHECK (requesting_gid >= 0);
+ALTER TABLE commands ADD COLUMN request_message_id TEXT NOT NULL DEFAULT '';
+PRAGMA user_version = 2;
+`); err != nil {
+		_ = tx.Rollback()
+		_ = database.Close()
+		t.Fatalf("create v2 schema: %v", err)
+	}
+	now := time.Now().UTC().Unix()
+	if _, err := tx.Exec(`INSERT INTO commands (
+	caller_uid, command_id, request_fingerprint, request_payload,
+	requesting_username, requesting_gid, request_message_id,
+	resource, command, operation_id, required_capability,
+	target_node, status, created_at, updated_at, expires_at
+) VALUES (?, ?, X'01', '{}', ?, ?, ?, 'node', 'update', 'node.drain', 'nodes.drain', 'c21', 'succeeded', ?, ?, ?)
+`, 1008, "cmd-v2-record", "slurm_legacy", 1234, "msg-v2", now, now, now+int64(Retention.Seconds())); err != nil {
+		_ = tx.Rollback()
+		_ = database.Close()
+		t.Fatalf("seed v2 record: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		_ = database.Close()
+		t.Fatalf("commit v2 schema: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("open and migrate v2 ledger: %v", err)
+	}
+	defer store.Close()
+	var version int
+	if err := store.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read migrated schema version: %v", err)
+	}
+	if version != SchemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, SchemaVersion)
+	}
+	record, found, err := store.Lookup(context.Background(), 1008, "cmd-v2-record")
+	if err != nil || !found || record.Status != StatusSucceeded || record.RequestingUsername != "slurm_legacy" {
+		t.Fatalf("migrated record=%#v found=%v err=%v; want existing v2 record preserved", record, found, err)
+	}
+	if record.RequestingGID != 1234 || record.RequestMessageID != "msg-v2" || record.ServiceUID != 0 || record.ServiceUsername != "" {
+		t.Fatalf("migrated identity fields = gid %d messageId %q service uid %d username %q; want requester fields preserved and service identity defaults", record.RequestingGID, record.RequestMessageID, record.ServiceUID, record.ServiceUsername)
+	}
+}
+
 func TestOpenRecoversInterruptedCommandsWithoutReexecution(t *testing.T) {
 	if seedPath := os.Getenv("COCKPIT_SLURM_LEDGER_SEED_PATH"); seedPath != "" {
 		seedInterruptedCommands(t, seedPath)
