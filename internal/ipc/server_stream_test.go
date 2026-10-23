@@ -60,6 +60,7 @@ type ipcNodeExecutor struct {
 	operation authorization.OperationID
 	node      string
 	reason    string
+	onExecute func(authorization.OperationID, string, string)
 }
 
 func (e *ipcNodeExecutor) Identity() command.ExecutionIdentity {
@@ -68,11 +69,15 @@ func (e *ipcNodeExecutor) Identity() command.ExecutionIdentity {
 
 func (e *ipcNodeExecutor) Execute(_ context.Context, operation authorization.OperationID, nodeName, reason string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.calls++
 	e.operation = operation
 	e.node = nodeName
 	e.reason = reason
+	onExecute := e.onExecute
+	e.mu.Unlock()
+	if onExecute != nil {
+		onExecute(operation, nodeName, reason)
+	}
 	return nil
 }
 
@@ -333,7 +338,18 @@ func TestIPCConnectionReplaysMessageResponseAndRejectsMessageIDConflict(t *testi
 
 func TestAuthenticatedCommandRunsThroughIPCServiceAndLedger(t *testing.T) {
 	cache := resource.NewNodeCache()
-	cache.ReplaceSnapshot([]resource.Node{resource.NewNode("c21", 1)})
+	initialNode := resource.NewNode("c21", 0)
+	initialNode.Status.State = "IDLE"
+	cache.ReplaceSnapshot([]resource.Node{initialNode})
+	adapter := &mutableNodeAdapter{nodes: []resource.Node{initialNode}}
+	streams, err := stream.NewNodeStreamRegistry(cache, stream.DefaultNodeStreamQueueSize)
+	if err != nil {
+		t.Fatalf("create Node stream registry: %v", err)
+	}
+	synchronizer, err := resource.NewNodeSynchronizer(adapter, cache, streams, time.Hour)
+	if err != nil {
+		t.Fatalf("create Node synchronizer: %v", err)
+	}
 	registry, err := authorization.NewNodeRegistry()
 	if err != nil {
 		t.Fatalf("create Node registry: %v", err)
@@ -345,18 +361,26 @@ func TestAuthenticatedCommandRunsThroughIPCServiceAndLedger(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	resolver := &adminCapabilityResolver{}
 	authorizer := authorization.NewAuthorizer(registry, resolver)
-	executor := &ipcNodeExecutor{}
+	executor := &ipcNodeExecutor{onExecute: func(operation authorization.OperationID, nodeName, reason string) {
+		if operation != authorization.OperationNodeDrain || nodeName != "c21" || reason != "scheduled maintenance" {
+			return
+		}
+		updatedNode := resource.NewNode(nodeName, 0)
+		updatedNode.Status.State = "DRAIN"
+		adapter.setNodes(updatedNode)
+	}}
 	commandService, err := command.NewService(store, authorizer, executor, registry, cache)
 	if err != nil {
 		t.Fatalf("create Command Service: %v", err)
 	}
+	commandService.SetNodeRefresh(synchronizer.Refresh)
 	messageDispatcher := dispatcher.NewDispatcherWithCacheAndCapabilities(cache, resolver)
 	if err := messageDispatcher.RegisterAuthenticated(protocol.MessageCommand, commandService); err != nil {
 		t.Fatalf("register authenticated command handler: %v", err)
 	}
 
 	socketPath := filepath.Join(t.TempDir(), "cockpit-slurm.sock")
-	server := NewServerWithDispatcher(socketPath, messageDispatcher)
+	server := NewServerWithNodeStreamsAndDispatcher(socketPath, streams, messageDispatcher)
 	if err := server.Listen(); err != nil {
 		t.Fatalf("Listen returned error: %v", err)
 	}
@@ -375,17 +399,45 @@ func TestAuthenticatedCommandRunsThroughIPCServiceAndLedger(t *testing.T) {
 	}
 	encoder := protocol.NewEncoder(client)
 	decoder := protocol.NewDecoder(client)
+	snapshot, err := decoder.Decode()
+	if err != nil || snapshot.Type != protocol.MessageEvent {
+		t.Fatalf("initial stream message=%#v err=%v; want Node snapshot event", snapshot, err)
+	}
 	request := protocol.NewEnvelope("IPC-COMMAND-1", protocol.MessageCommand, json.RawMessage(`{"commandId":"cmd-ipc-1","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"DRAIN","reason":"scheduled maintenance"}}`))
 	if err := encoder.Encode(request); err != nil {
 		t.Fatalf("send command: %v", err)
 	}
-	response, err := decoder.Decode()
-	if err != nil {
-		t.Fatalf("read command response: %v", err)
-	}
 	var commandResult protocol.NodeCommandResponsePayload
-	if response.Type != protocol.MessageCommandResponse || response.MessageID != request.MessageID || json.Unmarshal(response.Payload, &commandResult) != nil || commandResult.Status != protocol.CommandStatusSucceeded {
-		t.Fatalf("command response=%#v result=%#v; want correlated success", response, commandResult)
+	var initialResponse protocol.Envelope
+	gotCommandResponse := false
+	gotNodeChange := false
+	for range 2 {
+		response, err := decoder.Decode()
+		if err != nil {
+			t.Fatalf("read command response or Node event: %v", err)
+		}
+		switch response.Type {
+		case protocol.MessageCommandResponse:
+			if response.MessageID != request.MessageID || json.Unmarshal(response.Payload, &commandResult) != nil || commandResult.Status != protocol.CommandStatusSucceeded {
+				t.Fatalf("command response=%#v result=%#v; want correlated success", response, commandResult)
+			}
+			initialResponse = response
+			gotCommandResponse = true
+		case protocol.MessageEvent:
+			var event resource.NodeChangeBatch
+			if err := json.Unmarshal(response.Payload, &event); err != nil {
+				t.Fatalf("decode authoritative Node event: %v", err)
+			}
+			if event.Resource != "node" || event.Event != "changes" || event.Generation != 2 || len(event.Changes) != 1 || event.Changes[0].Node.Identity() != "c21" || event.Changes[0].Node.Status.State != "DRAIN" {
+				t.Fatalf("Node change event=%#v; want committed c21 DRAIN at generation 2", event)
+			}
+			gotNodeChange = true
+		default:
+			t.Fatalf("unexpected IPC response type %q", response.Type)
+		}
+	}
+	if !gotCommandResponse || !gotNodeChange {
+		t.Fatalf("received command response=%t Node change=%t; want both", gotCommandResponse, gotNodeChange)
 	}
 
 	replay := request
@@ -395,7 +447,7 @@ func TestAuthenticatedCommandRunsThroughIPCServiceAndLedger(t *testing.T) {
 		t.Fatalf("send same-message replay: %v", err)
 	}
 	replayed, err := decoder.Decode()
-	if err != nil || replayed.Type != response.Type || string(replayed.Payload) != string(response.Payload) {
+	if err != nil || replayed.Type != initialResponse.Type || string(replayed.Payload) != string(initialResponse.Payload) {
 		t.Fatalf("replayed response=%#v err=%v; want original response", replayed, err)
 	}
 

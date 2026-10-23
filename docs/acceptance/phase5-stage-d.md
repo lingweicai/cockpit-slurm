@@ -23,13 +23,14 @@ Stage D implementation started after Stages A, B, and C were explicitly recorded
 - `go test ./internal/ipc -count=1` passed for connection-scoped `messageId` replay caching: equivalent request payloads with changed timestamps reuse the original response, conflicting payloads return `message-id-conflict` without dispatch, and the bounded per-connection cache closes rather than evicting replay history.
 - A Unix-domain socket integration test verifies the live IPC loop dispatches an initial command once, returns the same response for an equivalent same-`messageId` replay, and returns `message-id-conflict` for a different payload without invoking the handler again.
 - A second Unix-domain socket test sends a Node drain through authenticated dispatch, fresh capability resolution, the Command Service, the durable test ledger, and an injected executor. It verifies the stored requester identity and response correlation, then proves same-message replay and conflicting-message rejection do not invoke authorization or execution again.
+- That authenticated IPC test also makes the fake executor update the adapter's observed Node snapshot and invokes the real `NodeSynchronizer.Refresh`; the client receives the committed generation-2 `DRAIN` event through the existing Node stream. The test passed 20 consecutive runs.
 - `go test ./cmd/cockpit-slurm` passed after daemon startup wiring.
 
 ## Remaining Stage D Gates
 
 - Exercise real SQLite commit-before-error and pre-commit failures through the production Command Service/ledger combination under the production systemd unit. The injected service-level reconciliation contract is covered locally.
 - Expand service-through-IPC coverage for denied requests and ledger uncertainty; current local tests cover these at the Command Service boundary, while the authenticated IPC vertical slice exercises the allowed drain path.
-- Verify the refreshed authoritative Node state arrives through the existing event stream after a real mutation; the refresh callback itself has focused unit coverage.
+- Verify the refreshed Node state and event on a real Slurm mutation; the complete cache/stream path is covered locally with an injected execution boundary.
 - Run the dedicated real-cluster drain/resume test through authenticated Cockpit IPC, proving the original requester is authorized before the helper is invoked, and restore the test Node's original state.
 - Record the target installation's exact command response, ledger record, helper execution identity, and subsequent Node event.
 
