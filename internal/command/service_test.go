@@ -180,7 +180,7 @@ func TestHandleAuthorizedDrainPersistsAndDeduplicates(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("ledger lookup found=%v err=%v, want record", found, err)
 	}
-	if record.Status != ledger.StatusSucceeded || record.AdminLevel != "admin" || record.ExecutionUID == nil || *record.ExecutionUID != executor.identity.UID || record.ExecutionUsername != executor.identity.Username || record.ExecutionBoundary != executor.identity.Boundary {
+	if record.Status != ledger.StatusSucceeded || record.AdminLevel != "admin" || record.RequestingGID != requester.GID || record.RequestMessageID != message.MessageID || record.ExecutionUID == nil || *record.ExecutionUID != executor.identity.UID || record.ExecutionUsername != executor.identity.Username || record.ExecutionBoundary != executor.identity.Boundary {
 		t.Fatalf("persisted command record = %#v, want succeeded with separate requester/execution identity", record)
 	}
 

@@ -77,6 +77,66 @@ func TestOpenInitializesVersionedDurableLedger(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesV1LedgerWithoutLosingRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commands.db")
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	tx, err := database.Begin()
+	if err != nil {
+		t.Fatalf("begin legacy schema transaction: %v", err)
+	}
+	if err := applyMigration(tx, 1); err != nil {
+		_ = tx.Rollback()
+		_ = database.Close()
+		t.Fatalf("create v1 schema: %v", err)
+	}
+	if _, err := tx.Exec(`PRAGMA user_version = 1`); err != nil {
+		_ = tx.Rollback()
+		_ = database.Close()
+		t.Fatalf("set legacy schema version: %v", err)
+	}
+	now := time.Now().UTC().Unix()
+	if _, err := tx.Exec(`INSERT INTO commands (
+	caller_uid, command_id, request_fingerprint, request_payload,
+	requesting_username, resource, command, operation_id, required_capability,
+	target_node, status, created_at, updated_at, expires_at
+) VALUES (?, ?, X'01', '{}', ?, 'node', 'update', 'node.drain', 'nodes.drain', 'c21', 'succeeded', ?, ?, ?)
+`, 1008, "cmd-v1-record", "slurm_legacy", now, now, now+int64(Retention.Seconds())); err != nil {
+		_ = tx.Rollback()
+		_ = database.Close()
+		t.Fatalf("seed legacy record: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		_ = database.Close()
+		t.Fatalf("commit legacy schema: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("open and migrate legacy ledger: %v", err)
+	}
+	defer store.Close()
+	var version int
+	if err := store.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read migrated schema version: %v", err)
+	}
+	if version != SchemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, SchemaVersion)
+	}
+	record, found, err := store.Lookup(context.Background(), 1008, "cmd-v1-record")
+	if err != nil || !found || record.Status != StatusSucceeded || record.RequestingUsername != "slurm_legacy" {
+		t.Fatalf("migrated record=%#v found=%v err=%v; want legacy record preserved", record, found, err)
+	}
+	if record.RequestingGID != 0 || record.RequestMessageID != "" {
+		t.Fatalf("legacy identity fields = gid %d messageId %q; want explicit unknown defaults", record.RequestingGID, record.RequestMessageID)
+	}
+}
+
 func TestOpenRecoversInterruptedCommandsWithoutReexecution(t *testing.T) {
 	if seedPath := os.Getenv("COCKPIT_SLURM_LEDGER_SEED_PATH"); seedPath != "" {
 		seedInterruptedCommands(t, seedPath)
@@ -782,6 +842,8 @@ func testClaim(callerUID uint32, commandID string, payload []byte) Claim {
 		RequestFingerprint: fingerprint[:],
 		RequestPayload:     payload,
 		RequestingUsername: "slurm_test",
+		RequestingGID:      987,
+		RequestMessageID:   "msg-" + commandID,
 		Resource:           "node",
 		Command:            "update",
 		OperationID:        "node.drain",

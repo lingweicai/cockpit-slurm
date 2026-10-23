@@ -16,7 +16,7 @@ import (
 
 const (
 	DefaultPath   = "/var/lib/cockpit-slurm/commands.db"
-	SchemaVersion = 1
+	SchemaVersion = 2
 	Retention     = 30 * 24 * time.Hour
 )
 
@@ -50,6 +50,8 @@ type Claim struct {
 	RequestFingerprint []byte
 	RequestPayload     []byte
 	RequestingUsername string
+	RequestingGID      uint32
+	RequestMessageID   string
 	Resource           string
 	Command            string
 	OperationID        string
@@ -63,6 +65,8 @@ type Record struct {
 	RequestFingerprint    []byte
 	RequestPayload        []byte
 	RequestingUsername    string
+	RequestingGID         uint32
+	RequestMessageID      string
 	Resource              string
 	Command               string
 	OperationID           string
@@ -200,12 +204,14 @@ func (l *Ledger) ReserveAuthorization(ctx context.Context, claim Claim) (Record,
 	result, err := tx.ExecContext(ctx, `
 INSERT INTO commands (
 	caller_uid, command_id, request_fingerprint, request_payload,
-	requesting_username, resource, command, operation_id, required_capability,
+	requesting_username, requesting_gid, request_message_id,
+	resource, command, operation_id, required_capability,
 	target_node, status, created_at, updated_at, expires_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (caller_uid, command_id) DO NOTHING
 `, claim.CallerUID, claim.CommandID, claim.RequestFingerprint, claim.RequestPayload,
-		claim.RequestingUsername, claim.Resource, claim.Command, claim.OperationID,
+		claim.RequestingUsername, claim.RequestingGID, claim.RequestMessageID,
+		claim.Resource, claim.Command, claim.OperationID,
 		claim.RequiredCapability, claim.TargetNode, StatusAuthorizationPending,
 		now.Unix(), now.Unix(), now.Add(Retention).Unix())
 	if err != nil {
@@ -350,7 +356,7 @@ func (l *Ledger) transitionConflict(ctx context.Context, callerUID uint32, comma
 }
 
 func validateClaim(claim Claim) error {
-	if claim.CommandID == "" || claim.RequestingUsername == "" || len(claim.RequestFingerprint) == 0 || len(claim.RequestPayload) == 0 || claim.TargetNode == "" {
+	if claim.CommandID == "" || claim.RequestingUsername == "" || claim.RequestMessageID == "" || len(claim.RequestFingerprint) == 0 || len(claim.RequestPayload) == 0 || claim.TargetNode == "" {
 		return fmt.Errorf("%w: incomplete authorization claim", ErrInvalidTransition)
 	}
 	if claim.Resource != "node" || claim.Command != "update" {
@@ -391,7 +397,8 @@ func nullableUID(value *uint32) any {
 }
 
 const recordColumns = `caller_uid, command_id, request_fingerprint, request_payload,
-requesting_username, resource, command, operation_id, required_capability,
+requesting_username, requesting_gid, request_message_id,
+resource, command, operation_id, required_capability,
 target_node, status, admin_level, authorization_metadata, execution_uid,
 execution_username, execution_boundary, result_payload, error_payload,
 created_at, updated_at, expires_at`
@@ -414,7 +421,8 @@ func scanRecord(row rowScanner, record *Record) error {
 	var createdAt, updatedAt, expiresAt int64
 	if err := row.Scan(
 		&record.CallerUID, &record.CommandID, &record.RequestFingerprint, &record.RequestPayload,
-		&record.RequestingUsername, &record.Resource, &record.Command, &record.OperationID,
+		&record.RequestingUsername, &record.RequestingGID, &record.RequestMessageID,
+		&record.Resource, &record.Command, &record.OperationID,
 		&record.RequiredCapability, &record.TargetNode, &status, &adminLevel,
 		&authorizationMetadata, &executionUID, &executionUsername, &executionBoundary,
 		&resultPayload, &errorPayload, &createdAt, &updatedAt, &expiresAt,
@@ -523,6 +531,12 @@ CREATE TABLE commands (
 	PRIMARY KEY (caller_uid, command_id)
 );
 CREATE INDEX commands_expires_at_idx ON commands(expires_at);
+		`)
+		return err
+	case 2:
+		_, err := tx.Exec(`
+ALTER TABLE commands ADD COLUMN requesting_gid INTEGER NOT NULL DEFAULT 0 CHECK (requesting_gid >= 0);
+ALTER TABLE commands ADD COLUMN request_message_id TEXT NOT NULL DEFAULT '';
 		`)
 		return err
 	default:
