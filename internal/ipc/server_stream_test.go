@@ -101,6 +101,7 @@ type ipcNodeExecutor struct {
 	node      string
 	reason    string
 	onExecute func(authorization.OperationID, string, string)
+	err       error
 }
 
 type ipcTransitionFaultLedger struct {
@@ -144,7 +145,7 @@ func (e *ipcNodeExecutor) Execute(_ context.Context, operation authorization.Ope
 	if onExecute != nil {
 		onExecute(operation, nodeName, reason)
 	}
-	return nil
+	return e.err
 }
 
 func (h *countingCommandHandler) Handle(_ context.Context, message protocol.Envelope) protocol.Envelope {
@@ -549,6 +550,130 @@ func TestAuthenticatedCommandRunsThroughIPCServiceAndLedger(t *testing.T) {
 	record, found, err := store.Lookup(context.Background(), peer.User.UID, "cmd-ipc-1")
 	if err != nil || !found || record.Status != ledger.StatusSucceeded || record.RequestingUsername != peer.User.Username || record.RequestingGID != peer.User.GID || record.RequestMessageID != request.MessageID || record.ServiceUID != uint32(os.Geteuid()) || record.ServiceUsername == "" {
 		t.Fatalf("command ledger record=%#v found=%v err=%v; want succeeded caller record", record, found, err)
+	}
+}
+
+func TestUnknownCommandOutcomeSynchronizesAndStaysDeduplicatedOverIPC(t *testing.T) {
+	cache := resource.NewNodeCache()
+	initialNode := resource.NewNode("c21", 0)
+	initialNode.Status.State = "IDLE"
+	cache.ReplaceSnapshot([]resource.Node{initialNode})
+	adapter := &mutableNodeAdapter{nodes: []resource.Node{initialNode}}
+	streams, err := stream.NewNodeStreamRegistry(cache, stream.DefaultNodeStreamQueueSize)
+	if err != nil {
+		t.Fatalf("create Node stream registry: %v", err)
+	}
+	synchronizer, err := resource.NewNodeSynchronizer(adapter, cache, streams, time.Hour)
+	if err != nil {
+		t.Fatalf("create Node synchronizer: %v", err)
+	}
+	registry, err := authorization.NewNodeRegistry()
+	if err != nil {
+		t.Fatalf("create Node registry: %v", err)
+	}
+	store, err := ledger.Open(filepath.Join(t.TempDir(), "commands.db"))
+	if err != nil {
+		t.Fatalf("open test ledger: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	resolver := &adminCapabilityResolver{}
+	authorizer := authorization.NewAuthorizer(registry, resolver)
+	executor := &ipcNodeExecutor{err: command.ErrExecutionOutcomeUnknown, onExecute: func(operation authorization.OperationID, nodeName, reason string) {
+		if operation == authorization.OperationNodeDrain && nodeName == "c21" && reason == "scheduled maintenance" {
+			observedNode := resource.NewNode(nodeName, 0)
+			observedNode.Status.State = "DRAIN"
+			adapter.setNodes(observedNode)
+		}
+	}}
+	commandService, err := command.NewService(store, authorizer, executor, registry, cache)
+	if err != nil {
+		t.Fatalf("create Command Service: %v", err)
+	}
+	commandService.SetNodeRefresh(synchronizer.Refresh)
+	messageDispatcher := dispatcher.NewDispatcherWithCacheAndCapabilities(cache, resolver)
+	if err := messageDispatcher.RegisterAuthenticated(protocol.MessageCommand, commandService); err != nil {
+		t.Fatalf("register authenticated command handler: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "cockpit-slurm.sock")
+	server := NewServerWithNodeStreamsAndDispatcher(socketPath, streams, messageDispatcher)
+	if err := server.Listen(); err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = server.Serve(ctx) }()
+
+	client, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Dial returned error: %v", err)
+	}
+	defer client.Close()
+	if err := client.SetDeadline(time.Now().Add(4 * time.Second)); err != nil {
+		t.Fatalf("set client deadline: %v", err)
+	}
+	encoder := protocol.NewEncoder(client)
+	decoder := protocol.NewDecoder(client)
+	if snapshot, err := decoder.Decode(); err != nil || snapshot.Type != protocol.MessageEvent {
+		t.Fatalf("initial stream message=%#v err=%v; want snapshot", snapshot, err)
+	}
+	request := protocol.NewEnvelope("IPC-UNKNOWN-1", protocol.MessageCommand, json.RawMessage(`{"commandId":"cmd-ipc-unknown","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"DRAIN","reason":"scheduled maintenance"}}`))
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("send command: %v", err)
+	}
+	gotUnknownResponse := false
+	gotNodeChange := false
+	for range 2 {
+		response, err := decoder.Decode()
+		if err != nil {
+			t.Fatalf("read unknown response or Node event: %v", err)
+		}
+		switch response.Type {
+		case protocol.MessageError:
+			var failure protocol.ErrorPayload
+			if response.MessageID != request.MessageID || json.Unmarshal(response.Payload, &failure) != nil || failure.Code != protocol.ErrorCodeCommandOutcomeUnknown || failure.Retryable {
+				t.Fatalf("unknown command response=%#v failure=%#v", response, failure)
+			}
+			gotUnknownResponse = true
+		case protocol.MessageEvent:
+			var event resource.NodeChangeBatch
+			if err := json.Unmarshal(response.Payload, &event); err != nil {
+				t.Fatalf("decode reconciliation event: %v", err)
+			}
+			if event.Event != "changes" || event.Generation != 2 || len(event.Changes) != 1 || event.Changes[0].Node.Status.State != "DRAIN" {
+				t.Fatalf("reconciliation event=%#v; want observed DRAIN state", event)
+			}
+			gotNodeChange = true
+		default:
+			t.Fatalf("unexpected message type %q", response.Type)
+		}
+	}
+	if !gotUnknownResponse || !gotNodeChange {
+		t.Fatalf("received unknown response=%t Node change=%t; want both", gotUnknownResponse, gotNodeChange)
+	}
+
+	retry := request
+	retry.MessageID = "IPC-UNKNOWN-RETRY"
+	if err := encoder.Encode(retry); err != nil {
+		t.Fatalf("send same command ID retry: %v", err)
+	}
+	retryResponse, err := decoder.Decode()
+	if err != nil {
+		t.Fatalf("read same command ID retry: %v", err)
+	}
+	var retryFailure protocol.ErrorPayload
+	if retryResponse.Type != protocol.MessageError || retryResponse.MessageID != retry.MessageID || json.Unmarshal(retryResponse.Payload, &retryFailure) != nil || retryFailure.Code != protocol.ErrorCodeCommandOutcomeUnknown {
+		t.Fatalf("retry response=%#v failure=%#v; want stored unknown outcome", retryResponse, retryFailure)
+	}
+	executor.mu.Lock()
+	executorCalls := executor.calls
+	executor.mu.Unlock()
+	resolver.mu.Lock()
+	resolverCalls := resolver.calls
+	resolver.mu.Unlock()
+	if executorCalls != 1 || resolverCalls != 1 {
+		t.Fatalf("executor calls=%d resolver calls=%d; want no re-execution or reauthorization", executorCalls, resolverCalls)
 	}
 }
 
