@@ -91,6 +91,56 @@ type transitionFaultLedger struct {
 	commitFirst  bool
 }
 
+type reserveFaultLedger struct {
+	Ledger
+	mu           sync.Mutex
+	blocked      bool
+	callerUID    uint32
+	commandID    string
+	commitFirst  bool
+	reconcileErr error
+}
+
+func (l *reserveFaultLedger) AdmissionBlocked() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.blocked || l.Ledger.AdmissionBlocked()
+}
+
+func (l *reserveFaultLedger) ReserveAuthorization(ctx context.Context, claim ledger.Claim) (ledger.Record, bool, error) {
+	var record ledger.Record
+	if l.commitFirst {
+		var err error
+		record, _, err = l.Ledger.ReserveAuthorization(ctx, claim)
+		if err != nil {
+			return ledger.Record{}, false, err
+		}
+	}
+	l.mu.Lock()
+	l.blocked = true
+	l.mu.Unlock()
+	return record, false, errors.New("injected uncertain claim result")
+}
+
+func (l *reserveFaultLedger) Reconcile(ctx context.Context) error {
+	if l.reconcileErr != nil {
+		return l.reconcileErr
+	}
+	record, found, err := l.Ledger.Lookup(ctx, l.callerUID, l.commandID)
+	if err != nil {
+		return err
+	}
+	if found && record.Status == ledger.StatusAuthorizationPending {
+		if err := l.Ledger.Transition(ctx, l.callerUID, l.commandID, ledger.StatusAuthorizationPending, ledger.StatusAuthorizationUncertain, ledger.TransitionData{}); err != nil {
+			return err
+		}
+	}
+	l.mu.Lock()
+	l.blocked = false
+	l.mu.Unlock()
+	return nil
+}
+
 func (l *transitionFaultLedger) AdmissionBlocked() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -479,6 +529,55 @@ func TestUncertainAuthorizationTransitionNeverDispatches(t *testing.T) {
 		service.ledger = faultLedger
 		response := service.Handle(context.Background(), requester, drainMessage("cmd-reconcile-failure", "maintenance"))
 		if response.Type != protocol.MessageError || !faultLedger.AdmissionBlocked() || executor.calls != 0 || authorizer.calls != 1 {
+			t.Fatalf("response=%#v admission blocked=%v authorizer calls=%d executor calls=%d", response, faultLedger.AdmissionBlocked(), authorizer.calls, executor.calls)
+		}
+	})
+}
+
+func TestUncertainAuthorizationClaimNeverAuthorizesOrExecutes(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		commitFirst bool
+		wantRecord  bool
+	}{
+		{name: "commit before error", commitFirst: true, wantRecord: true},
+		{name: "pre-commit error", commitFirst: false, wantRecord: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, store, authorizer, executor, requester := newTestService(t, true)
+			faultLedger := &reserveFaultLedger{
+				Ledger: store, callerUID: requester.UID,
+				commandID: "cmd-claim-fault", commitFirst: test.commitFirst,
+			}
+			service.ledger = faultLedger
+			response := service.Handle(context.Background(), requester, drainMessage("cmd-claim-fault", "maintenance"))
+			var failure protocol.ErrorPayload
+			if response.Type != protocol.MessageError || json.Unmarshal(response.Payload, &failure) != nil || failure.Code != protocol.ErrorCodeLedgerPersistenceFailed {
+				t.Fatalf("response=%#v failure=%#v; want ledger-persistence-failed", response, failure)
+			}
+			if authorizer.calls != 0 || executor.calls != 0 || faultLedger.AdmissionBlocked() {
+				t.Fatalf("authorizer calls=%d executor calls=%d admission blocked=%v; want no authorization/execution and resolved gate", authorizer.calls, executor.calls, faultLedger.AdmissionBlocked())
+			}
+			record, found, err := store.Lookup(context.Background(), requester.UID, "cmd-claim-fault")
+			if err != nil || found != test.wantRecord {
+				t.Fatalf("record=%#v found=%v err=%v; want record presence %t", record, found, err, test.wantRecord)
+			}
+			if test.wantRecord && record.Status != ledger.StatusAuthorizationUncertain {
+				t.Fatalf("record status=%s; want authorization_uncertain", record.Status)
+			}
+		})
+	}
+
+	t.Run("reconciliation failure leaves gate blocked", func(t *testing.T) {
+		service, _, authorizer, executor, requester := newTestService(t, true)
+		faultLedger := &reserveFaultLedger{
+			Ledger: service.ledger, callerUID: requester.UID,
+			commandID:    "cmd-claim-reconcile-failure",
+			reconcileErr: errors.New("integrity check failed"),
+		}
+		service.ledger = faultLedger
+		response := service.Handle(context.Background(), requester, drainMessage("cmd-claim-reconcile-failure", "maintenance"))
+		if response.Type != protocol.MessageError || !faultLedger.AdmissionBlocked() || authorizer.calls != 0 || executor.calls != 0 {
 			t.Fatalf("response=%#v admission blocked=%v authorizer calls=%d executor calls=%d", response, faultLedger.AdmissionBlocked(), authorizer.calls, executor.calls)
 		}
 	})
