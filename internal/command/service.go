@@ -231,6 +231,9 @@ func (s *Service) Handle(ctx context.Context, requester connection.UserContext, 
 		if transitionErr := s.ledger.Transition(ctx, requester.UID, request.CommandID, ledger.StatusRunning, status, ledger.TransitionData{ErrorPayload: marshalPayload(failure)}); transitionErr != nil {
 			return s.persistenceError(message, request.CommandID)
 		}
+		if status == ledger.StatusUnknown {
+			s.requestNodeRefresh(ctx)
+		}
 		return protocol.NewErrorEnvelope(message.MessageID, failure)
 	}
 
@@ -246,17 +249,22 @@ func (s *Service) Handle(ctx context.Context, requester connection.UserContext, 
 	if err := s.ledger.Transition(ctx, requester.UID, request.CommandID, ledger.StatusRunning, ledger.StatusSucceeded, ledger.TransitionData{ResultPayload: result}); err != nil {
 		return s.persistenceError(message, request.CommandID)
 	}
-	if s.refresh != nil {
-		refresh := s.refresh
-		go func() {
-			refreshContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			if err := refresh(refreshContext); err != nil {
-				log.Printf("post-command Node refresh failed: %v", err)
-			}
-		}()
-	}
+	s.requestNodeRefresh(ctx)
 	return protocol.NewEnvelope(message.MessageID, protocol.MessageCommandResponse, result)
+}
+
+func (s *Service) requestNodeRefresh(ctx context.Context) {
+	if s.refresh == nil {
+		return
+	}
+	refresh := s.refresh
+	go func() {
+		refreshContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if err := refresh(refreshContext); err != nil {
+			log.Printf("post-command Node refresh failed: %v", err)
+		}
+	}()
 }
 
 func (s *Service) HandleAuthenticated(ctx context.Context, requester connection.UserContext, message protocol.Envelope) protocol.Envelope {

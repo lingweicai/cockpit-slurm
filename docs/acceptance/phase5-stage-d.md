@@ -16,6 +16,7 @@ Stage D implementation started after Stages A, B, and C were explicitly recorded
 - Added a fixed D-Bus client for the Stage C restricted helper. The command record keeps requester identity separate from the helper's configured Slurm execution identity and D-Bus boundary.
 - Registered `command` as an authenticated IPC handler and wired the command service, registry, Authorizer, and helper client into daemon startup. No frontend mutation UI was added.
 - After a durably recorded successful result, the service requests a bounded asynchronous refresh through the existing `NodeSynchronizer.Refresh`; it does not optimistically mutate the Node cache.
+- An execution outcome persisted as `unknown` also requests that bounded refresh so normal synchronization can reconcile observed state; the refresh does not rewrite the command result. Definite failures do not trigger this unknown-outcome refresh.
 - The D-Bus executor treats unclassified transport failures as `unknown` outcomes; only explicit helper validation/access/execution errors are considered definite failures.
 
 ## Verification
@@ -29,6 +30,7 @@ Stage D implementation started after Stages A, B, and C were explicitly recorded
 - An authenticated Unix IPC persistence-fault test injects an uncertain accepted transition and failed reconciliation; it verifies canonical non-retryable `ledger-persistence-failed`, a blocked admission gate, the retained non-executable claim, and zero executor calls.
 - A same-connection authorization test changes the resolver from admin to operator and back: a new ID is denied after revocation, the denied ID stays denied after permission is restored, and a fresh ID is allowed. Resolver and executor call counts confirm each eligible new command is freshly authorized exactly once.
 - `go test ./cmd/cockpit-slurm` passed after daemon startup wiring.
+- Command Service tests verify unknown outcomes request Node synchronization while definite execution failures do not.
 - Ledger, Command Service, and authenticated IPC tests verify requester GID, original request `messageId`, and daemon service identity survive persistence and reopen; the v1 migration test preserves existing records and initializes unavailable historical attribution fields to explicit defaults.
 - On 2026-10-23, an attempt to run the compiled command-package tests as `cockpit-slurm` in an isolated transient systemd unit with `StateDirectory=cockpit-slurm-stage-d`, `NoNewPrivileges=true`, `ProtectSystem=strict`, and `ProtectHome=true` reported test failure without per-test diagnostics. A verbose follow-up could not run because non-interactive sudo required a password. This attempt is not counted as passing evidence; the production ledger was not accessed and no Slurm/helper operation was invoked. The temporary test binary was absent on follow-up inspection.
 

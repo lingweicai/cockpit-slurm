@@ -248,6 +248,11 @@ func TestExecutionFailureAndUnknownOutcomeArePersistedSeparately(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			service, store, _, executor, requester := newTestService(t, true)
 			executor.err = test.executionErr
+			refreshRequested := make(chan struct{}, 1)
+			service.SetNodeRefresh(func(context.Context) error {
+				refreshRequested <- struct{}{}
+				return nil
+			})
 			message := resumeMessage(test.commandID)
 			response := service.Handle(context.Background(), requester, message)
 			var failure protocol.ErrorPayload
@@ -257,6 +262,19 @@ func TestExecutionFailureAndUnknownOutcomeArePersistedSeparately(t *testing.T) {
 			record, found, err := store.Lookup(context.Background(), requester.UID, test.commandID)
 			if err != nil || !found || record.Status != test.wantStatus || executor.calls != 1 {
 				t.Fatalf("record=%#v found=%v err=%v executor calls=%d; want %s", record, found, err, executor.calls, test.wantStatus)
+			}
+			if test.wantStatus == ledger.StatusUnknown {
+				select {
+				case <-refreshRequested:
+				case <-time.After(time.Second):
+					t.Fatal("unknown command outcome did not request Node synchronization")
+				}
+			} else {
+				select {
+				case <-refreshRequested:
+					t.Fatal("definite command failure unexpectedly requested Node synchronization")
+				default:
+				}
 			}
 		})
 	}
