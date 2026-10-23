@@ -48,6 +48,28 @@ type nonAdminCapabilityResolver struct {
 	calls int
 }
 
+type changeableCapabilityResolver struct {
+	mu    sync.Mutex
+	admin bool
+	calls int
+}
+
+func (r *changeableCapabilityResolver) Resolve(_ context.Context, requester connection.UserContext) (connection.UserContext, error) {
+	r.mu.Lock()
+	admin := r.admin
+	r.calls++
+	r.mu.Unlock()
+	requester.AdminLevel = "operator"
+	if admin {
+		requester.AdminLevel = "admin"
+	}
+	requester.Capabilities = map[string]bool{
+		identity.CapabilityNodeDrain:  admin,
+		identity.CapabilityNodeResume: admin,
+	}
+	return requester, nil
+}
+
 func (r *nonAdminCapabilityResolver) Resolve(_ context.Context, requester connection.UserContext) (connection.UserContext, error) {
 	r.mu.Lock()
 	r.calls++
@@ -668,6 +690,120 @@ func TestLedgerUncertaintyThroughIPCBlocksExecution(t *testing.T) {
 	record, found, err := store.Lookup(context.Background(), peer.User.UID, "cmd-ipc-ledger-error")
 	if err != nil || !found || record.Status != ledger.StatusAuthorizationPending {
 		t.Fatalf("record=%#v found=%v err=%v; want unresolved non-executable claim", record, found, err)
+	}
+}
+
+func TestFreshAuthorizationChangesOnOpenIPCConnection(t *testing.T) {
+	cache := resource.NewNodeCache()
+	cache.ReplaceSnapshot([]resource.Node{resource.NewNode("c21", 1)})
+	registry, err := authorization.NewNodeRegistry()
+	if err != nil {
+		t.Fatalf("create Node registry: %v", err)
+	}
+	store, err := ledger.Open(filepath.Join(t.TempDir(), "commands.db"))
+	if err != nil {
+		t.Fatalf("open test ledger: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	resolver := &changeableCapabilityResolver{admin: true}
+	authorizer := authorization.NewAuthorizer(registry, resolver)
+	executor := &ipcNodeExecutor{}
+	commandService, err := command.NewService(store, authorizer, executor, registry, cache)
+	if err != nil {
+		t.Fatalf("create Command Service: %v", err)
+	}
+	messageDispatcher := dispatcher.NewDispatcherWithCacheAndCapabilities(cache, resolver)
+	if err := messageDispatcher.RegisterAuthenticated(protocol.MessageCommand, commandService); err != nil {
+		t.Fatalf("register authenticated command handler: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "cockpit-slurm.sock")
+	server := NewServerWithDispatcher(socketPath, messageDispatcher)
+	if err := server.Listen(); err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = server.Serve(ctx) }()
+
+	client, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Dial returned error: %v", err)
+	}
+	defer client.Close()
+	peer, err := connection.NewConnection(client)
+	if err != nil {
+		t.Fatalf("resolve test client's peer identity: %v", err)
+	}
+	defer peer.Close()
+	if err := client.SetDeadline(time.Now().Add(4 * time.Second)); err != nil {
+		t.Fatalf("set client deadline: %v", err)
+	}
+	encoder := protocol.NewEncoder(client)
+	decoder := protocol.NewDecoder(client)
+	send := func(messageID, commandID, state string) protocol.Envelope {
+		parameters := protocol.NodeCommandParameters{State: state}
+		if state == "DRAIN" {
+			reason := "maintenance"
+			parameters.Reason = &reason
+		}
+		payload, err := json.Marshal(protocol.NodeCommandRequestPayload{
+			CommandID: commandID, Resource: "node", Command: "update",
+			Target: protocol.NodeCommandTarget{NodeName: "c21"}, Parameters: parameters,
+		})
+		if err != nil {
+			t.Fatalf("marshal %s command: %v", commandID, err)
+		}
+		message := protocol.NewEnvelope(messageID, protocol.MessageCommand, payload)
+		if err := encoder.Encode(message); err != nil {
+			t.Fatalf("send %s command: %v", commandID, err)
+		}
+		response, err := decoder.Decode()
+		if err != nil {
+			t.Fatalf("read %s response: %v", commandID, err)
+		}
+		return response
+	}
+
+	allowed := send("ROLE-CHANGE-1", "cmd-role-admin", "DRAIN")
+	if allowed.Type != protocol.MessageCommandResponse {
+		t.Fatalf("initial admin response=%#v; want allowed command", allowed)
+	}
+	resolver.mu.Lock()
+	resolver.admin = false
+	resolver.mu.Unlock()
+
+	denied := send("ROLE-CHANGE-2", "cmd-role-revoked", "RESUME")
+	var denial protocol.ErrorPayload
+	if denied.Type != protocol.MessageError || json.Unmarshal(denied.Payload, &denial) != nil || denial.Code != protocol.ErrorCodeAuthorizationDenied {
+		t.Fatalf("revoked-role response=%#v denial=%#v; want authorization-denied", denied, denial)
+	}
+	deniedRecord, found, err := store.Lookup(context.Background(), peer.User.UID, "cmd-role-revoked")
+	if err != nil || !found || deniedRecord.Status != ledger.StatusDenied {
+		t.Fatalf("denied record=%#v found=%v err=%v; want durable denied tombstone", deniedRecord, found, err)
+	}
+
+	resolver.mu.Lock()
+	resolver.admin = true
+	resolver.mu.Unlock()
+	deniedRetry := send("ROLE-CHANGE-3", "cmd-role-revoked", "RESUME")
+	if deniedRetry.Type != protocol.MessageError || json.Unmarshal(deniedRetry.Payload, &denial) != nil || denial.Code != protocol.ErrorCodeAuthorizationDenied {
+		t.Fatalf("same-ID retry after grant=%#v denial=%#v; want stored denial", deniedRetry, denial)
+	}
+	newIDAllowed := send("ROLE-CHANGE-4", "cmd-role-admin-new", "RESUME")
+	if newIDAllowed.Type != protocol.MessageCommandResponse {
+		t.Fatalf("new-ID response after grant=%#v; want allowed command", newIDAllowed)
+	}
+
+	executor.mu.Lock()
+	executorCalls := executor.calls
+	executor.mu.Unlock()
+	resolver.mu.Lock()
+	resolverCalls := resolver.calls
+	resolver.mu.Unlock()
+	if executorCalls != 2 || resolverCalls != 3 {
+		t.Fatalf("executor calls=%d resolver calls=%d; want 2 executions and 3 fresh authorizations", executorCalls, resolverCalls)
 	}
 }
 
