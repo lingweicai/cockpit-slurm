@@ -3,6 +3,7 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -42,6 +43,23 @@ type adminCapabilityResolver struct {
 	calls int
 }
 
+type nonAdminCapabilityResolver struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *nonAdminCapabilityResolver) Resolve(_ context.Context, requester connection.UserContext) (connection.UserContext, error) {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	requester.AdminLevel = "operator"
+	requester.Capabilities = map[string]bool{
+		identity.CapabilityNodeDrain:  false,
+		identity.CapabilityNodeResume: false,
+	}
+	return requester, nil
+}
+
 func (r *adminCapabilityResolver) Resolve(_ context.Context, requester connection.UserContext) (connection.UserContext, error) {
 	r.mu.Lock()
 	r.calls++
@@ -61,6 +79,32 @@ type ipcNodeExecutor struct {
 	node      string
 	reason    string
 	onExecute func(authorization.OperationID, string, string)
+}
+
+type ipcTransitionFaultLedger struct {
+	command.Ledger
+	mu      sync.Mutex
+	blocked bool
+}
+
+func (l *ipcTransitionFaultLedger) AdmissionBlocked() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.blocked || l.Ledger.AdmissionBlocked()
+}
+
+func (l *ipcTransitionFaultLedger) Transition(ctx context.Context, uid uint32, commandID string, expected, next ledger.Status, data ledger.TransitionData) error {
+	if expected == ledger.StatusAuthorizationPending && next == ledger.StatusAccepted {
+		l.mu.Lock()
+		l.blocked = true
+		l.mu.Unlock()
+		return errors.New("injected uncertain ledger transition")
+	}
+	return l.Ledger.Transition(ctx, uid, commandID, expected, next, data)
+}
+
+func (l *ipcTransitionFaultLedger) Reconcile(context.Context) error {
+	return errors.New("injected ledger integrity failure")
 }
 
 func (e *ipcNodeExecutor) Identity() command.ExecutionIdentity {
@@ -483,6 +527,147 @@ func TestAuthenticatedCommandRunsThroughIPCServiceAndLedger(t *testing.T) {
 	record, found, err := store.Lookup(context.Background(), peer.User.UID, "cmd-ipc-1")
 	if err != nil || !found || record.Status != ledger.StatusSucceeded || record.RequestingUsername != peer.User.Username {
 		t.Fatalf("command ledger record=%#v found=%v err=%v; want succeeded caller record", record, found, err)
+	}
+}
+
+func TestUnauthorizedCommandThroughIPCIsPersistedAndNotExecuted(t *testing.T) {
+	cache := resource.NewNodeCache()
+	cache.ReplaceSnapshot([]resource.Node{resource.NewNode("c21", 1)})
+	registry, err := authorization.NewNodeRegistry()
+	if err != nil {
+		t.Fatalf("create Node registry: %v", err)
+	}
+	store, err := ledger.Open(filepath.Join(t.TempDir(), "commands.db"))
+	if err != nil {
+		t.Fatalf("open test ledger: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	resolver := &nonAdminCapabilityResolver{}
+	authorizer := authorization.NewAuthorizer(registry, resolver)
+	executor := &ipcNodeExecutor{}
+	commandService, err := command.NewService(store, authorizer, executor, registry, cache)
+	if err != nil {
+		t.Fatalf("create Command Service: %v", err)
+	}
+	messageDispatcher := dispatcher.NewDispatcherWithCacheAndCapabilities(cache, resolver)
+	if err := messageDispatcher.RegisterAuthenticated(protocol.MessageCommand, commandService); err != nil {
+		t.Fatalf("register authenticated command handler: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "cockpit-slurm.sock")
+	server := NewServerWithDispatcher(socketPath, messageDispatcher)
+	if err := server.Listen(); err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = server.Serve(ctx) }()
+
+	client, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Dial returned error: %v", err)
+	}
+	defer client.Close()
+	if err := client.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatalf("set client deadline: %v", err)
+	}
+	request := protocol.NewEnvelope("IPC-DENY-1", protocol.MessageCommand, json.RawMessage(`{"commandId":"cmd-ipc-denied","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"DRAIN","reason":"scheduled maintenance"}}`))
+	if err := protocol.NewEncoder(client).Encode(request); err != nil {
+		t.Fatalf("send command: %v", err)
+	}
+	response, err := protocol.NewDecoder(client).Decode()
+	if err != nil {
+		t.Fatalf("read authorization response: %v", err)
+	}
+	var failure protocol.ErrorPayload
+	if response.Type != protocol.MessageError || response.MessageID != request.MessageID || json.Unmarshal(response.Payload, &failure) != nil || failure.Code != protocol.ErrorCodeAuthorizationDenied || failure.Category != protocol.ErrorCategoryAuthorization {
+		t.Fatalf("response=%#v failure=%#v; want correlated authorization-denied", response, failure)
+	}
+
+	peer, err := connection.NewConnection(client)
+	if err != nil {
+		t.Fatalf("resolve test client's peer identity: %v", err)
+	}
+	defer peer.Close()
+	record, found, err := store.Lookup(context.Background(), peer.User.UID, "cmd-ipc-denied")
+	if err != nil || !found || record.Status != ledger.StatusDenied || executor.calls != 0 {
+		t.Fatalf("record=%#v found=%v err=%v executor calls=%d; want denied tombstone and no execution", record, found, err, executor.calls)
+	}
+	resolver.mu.Lock()
+	resolveCount := resolver.calls
+	resolver.mu.Unlock()
+	if resolveCount != 1 {
+		t.Fatalf("authorization resolver calls = %d, want 1", resolveCount)
+	}
+}
+
+func TestLedgerUncertaintyThroughIPCBlocksExecution(t *testing.T) {
+	cache := resource.NewNodeCache()
+	cache.ReplaceSnapshot([]resource.Node{resource.NewNode("c21", 1)})
+	registry, err := authorization.NewNodeRegistry()
+	if err != nil {
+		t.Fatalf("create Node registry: %v", err)
+	}
+	store, err := ledger.Open(filepath.Join(t.TempDir(), "commands.db"))
+	if err != nil {
+		t.Fatalf("open test ledger: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	faultLedger := &ipcTransitionFaultLedger{Ledger: store}
+	resolver := &adminCapabilityResolver{}
+	authorizer := authorization.NewAuthorizer(registry, resolver)
+	executor := &ipcNodeExecutor{}
+	commandService, err := command.NewService(faultLedger, authorizer, executor, registry, cache)
+	if err != nil {
+		t.Fatalf("create Command Service: %v", err)
+	}
+	messageDispatcher := dispatcher.NewDispatcherWithCacheAndCapabilities(cache, resolver)
+	if err := messageDispatcher.RegisterAuthenticated(protocol.MessageCommand, commandService); err != nil {
+		t.Fatalf("register authenticated command handler: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "cockpit-slurm.sock")
+	server := NewServerWithDispatcher(socketPath, messageDispatcher)
+	if err := server.Listen(); err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = server.Serve(ctx) }()
+
+	client, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Dial returned error: %v", err)
+	}
+	defer client.Close()
+	if err := client.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatalf("set client deadline: %v", err)
+	}
+	request := protocol.NewEnvelope("IPC-LEDGER-ERROR-1", protocol.MessageCommand, json.RawMessage(`{"commandId":"cmd-ipc-ledger-error","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"DRAIN","reason":"scheduled maintenance"}}`))
+	if err := protocol.NewEncoder(client).Encode(request); err != nil {
+		t.Fatalf("send command: %v", err)
+	}
+	response, err := protocol.NewDecoder(client).Decode()
+	if err != nil {
+		t.Fatalf("read persistence error response: %v", err)
+	}
+	var failure protocol.ErrorPayload
+	if response.Type != protocol.MessageError || response.MessageID != request.MessageID || json.Unmarshal(response.Payload, &failure) != nil || failure.Code != protocol.ErrorCodeLedgerPersistenceFailed || failure.Retryable {
+		t.Fatalf("response=%#v failure=%#v; want correlated non-retryable ledger error", response, failure)
+	}
+	if executor.calls != 0 || !faultLedger.AdmissionBlocked() {
+		t.Fatalf("executor calls=%d admission blocked=%v; want no execution and blocked admission", executor.calls, faultLedger.AdmissionBlocked())
+	}
+	peer, err := connection.NewConnection(client)
+	if err != nil {
+		t.Fatalf("resolve test client's peer identity: %v", err)
+	}
+	defer peer.Close()
+	record, found, err := store.Lookup(context.Background(), peer.User.UID, "cmd-ipc-ledger-error")
+	if err != nil || !found || record.Status != ledger.StatusAuthorizationPending {
+		t.Fatalf("record=%#v found=%v err=%v; want unresolved non-executable claim", record, found, err)
 	}
 }
 
