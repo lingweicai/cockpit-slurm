@@ -54,6 +54,18 @@ type changeableCapabilityResolver struct {
 	calls int
 }
 
+type failedCapabilityResolver struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *failedCapabilityResolver) Resolve(context.Context, connection.UserContext) (connection.UserContext, error) {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	return connection.UserContext{}, errors.New("simulated Slurm user lookup failure")
+}
+
 func (r *changeableCapabilityResolver) Resolve(_ context.Context, requester connection.UserContext) (connection.UserContext, error) {
 	r.mu.Lock()
 	admin := r.admin
@@ -746,6 +758,77 @@ func TestUnauthorizedCommandThroughIPCIsPersistedAndNotExecuted(t *testing.T) {
 	resolver.mu.Unlock()
 	if resolveCount != 1 {
 		t.Fatalf("authorization resolver calls = %d, want 1", resolveCount)
+	}
+}
+
+func TestAuthorizationLookupFailureThroughIPCIsPersistedAndNotExecuted(t *testing.T) {
+	cache := resource.NewNodeCache()
+	cache.ReplaceSnapshot([]resource.Node{resource.NewNode("c21", 1)})
+	registry, err := authorization.NewNodeRegistry()
+	if err != nil {
+		t.Fatalf("create Node registry: %v", err)
+	}
+	store, err := ledger.Open(filepath.Join(t.TempDir(), "commands.db"))
+	if err != nil {
+		t.Fatalf("open test ledger: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	resolver := &failedCapabilityResolver{}
+	authorizer := authorization.NewAuthorizer(registry, resolver)
+	executor := &ipcNodeExecutor{}
+	commandService, err := command.NewService(store, authorizer, executor, registry, cache)
+	if err != nil {
+		t.Fatalf("create Command Service: %v", err)
+	}
+	messageDispatcher := dispatcher.NewDispatcherWithCacheAndCapabilities(cache, resolver)
+	if err := messageDispatcher.RegisterAuthenticated(protocol.MessageCommand, commandService); err != nil {
+		t.Fatalf("register authenticated command handler: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "cockpit-slurm.sock")
+	server := NewServerWithDispatcher(socketPath, messageDispatcher)
+	if err := server.Listen(); err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = server.Serve(ctx) }()
+
+	client, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Dial returned error: %v", err)
+	}
+	defer client.Close()
+	if err := client.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatalf("set client deadline: %v", err)
+	}
+	request := protocol.NewEnvelope("IPC-LOOKUP-FAIL-1", protocol.MessageCommand, json.RawMessage(`{"commandId":"cmd-ipc-lookup-failure","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"DRAIN","reason":"scheduled maintenance"}}`))
+	if err := protocol.NewEncoder(client).Encode(request); err != nil {
+		t.Fatalf("send command: %v", err)
+	}
+	response, err := protocol.NewDecoder(client).Decode()
+	if err != nil {
+		t.Fatalf("read authorization error: %v", err)
+	}
+	var failure protocol.ErrorPayload
+	if response.Type != protocol.MessageError || response.MessageID != request.MessageID || json.Unmarshal(response.Payload, &failure) != nil || failure.Code != protocol.ErrorCodeUserLookupFailed || failure.Category != protocol.ErrorCategoryInternal {
+		t.Fatalf("response=%#v failure=%#v; want correlated user-lookup-failed", response, failure)
+	}
+	peer, err := connection.NewConnection(client)
+	if err != nil {
+		t.Fatalf("resolve test client's peer identity: %v", err)
+	}
+	defer peer.Close()
+	record, found, err := store.Lookup(context.Background(), peer.User.UID, "cmd-ipc-lookup-failure")
+	if err != nil || !found || record.Status != ledger.StatusAuthorizationFailed || executor.calls != 0 {
+		t.Fatalf("record=%#v found=%v err=%v executor calls=%d; want authorization-failure tombstone and no execution", record, found, err, executor.calls)
+	}
+	resolver.mu.Lock()
+	resolverCalls := resolver.calls
+	resolver.mu.Unlock()
+	if resolverCalls != 1 {
+		t.Fatalf("resolver calls=%d, want one fresh lookup", resolverCalls)
 	}
 }
 
