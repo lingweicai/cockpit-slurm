@@ -10,8 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lingweicai/cockpit-slurm/internal/authorization"
+	"github.com/lingweicai/cockpit-slurm/internal/command"
 	"github.com/lingweicai/cockpit-slurm/internal/connection"
 	"github.com/lingweicai/cockpit-slurm/internal/dispatcher"
+	"github.com/lingweicai/cockpit-slurm/internal/identity"
+	"github.com/lingweicai/cockpit-slurm/internal/ledger"
 	"github.com/lingweicai/cockpit-slurm/internal/protocol"
 	"github.com/lingweicai/cockpit-slurm/internal/resource"
 	"github.com/lingweicai/cockpit-slurm/internal/stream"
@@ -31,6 +35,45 @@ func (transportCommandHandler) Handle(_ context.Context, message protocol.Envelo
 type countingCommandHandler struct {
 	mu    sync.Mutex
 	calls int
+}
+
+type adminCapabilityResolver struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *adminCapabilityResolver) Resolve(_ context.Context, requester connection.UserContext) (connection.UserContext, error) {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	requester.AdminLevel = "admin"
+	requester.Capabilities = map[string]bool{
+		identity.CapabilityNodeDrain:  true,
+		identity.CapabilityNodeResume: true,
+	}
+	return requester, nil
+}
+
+type ipcNodeExecutor struct {
+	mu        sync.Mutex
+	calls     int
+	operation authorization.OperationID
+	node      string
+	reason    string
+}
+
+func (e *ipcNodeExecutor) Identity() command.ExecutionIdentity {
+	return command.ExecutionIdentity{UID: 202, Username: "slurm", Boundary: "test-executor"}
+}
+
+func (e *ipcNodeExecutor) Execute(_ context.Context, operation authorization.OperationID, nodeName, reason string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.calls++
+	e.operation = operation
+	e.node = nodeName
+	e.reason = reason
+	return nil
 }
 
 func (h *countingCommandHandler) Handle(_ context.Context, message protocol.Envelope) protocol.Envelope {
@@ -285,6 +328,109 @@ func TestIPCConnectionReplaysMessageResponseAndRejectsMessageIDConflict(t *testi
 	handler.mu.Unlock()
 	if calls != 1 {
 		t.Fatalf("command handler calls = %d, want 1", calls)
+	}
+}
+
+func TestAuthenticatedCommandRunsThroughIPCServiceAndLedger(t *testing.T) {
+	cache := resource.NewNodeCache()
+	cache.ReplaceSnapshot([]resource.Node{resource.NewNode("c21", 1)})
+	registry, err := authorization.NewNodeRegistry()
+	if err != nil {
+		t.Fatalf("create Node registry: %v", err)
+	}
+	store, err := ledger.Open(filepath.Join(t.TempDir(), "commands.db"))
+	if err != nil {
+		t.Fatalf("open test ledger: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	resolver := &adminCapabilityResolver{}
+	authorizer := authorization.NewAuthorizer(registry, resolver)
+	executor := &ipcNodeExecutor{}
+	commandService, err := command.NewService(store, authorizer, executor, registry, cache)
+	if err != nil {
+		t.Fatalf("create Command Service: %v", err)
+	}
+	messageDispatcher := dispatcher.NewDispatcherWithCacheAndCapabilities(cache, resolver)
+	if err := messageDispatcher.RegisterAuthenticated(protocol.MessageCommand, commandService); err != nil {
+		t.Fatalf("register authenticated command handler: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "cockpit-slurm.sock")
+	server := NewServerWithDispatcher(socketPath, messageDispatcher)
+	if err := server.Listen(); err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = server.Serve(ctx) }()
+
+	client, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Dial returned error: %v", err)
+	}
+	defer client.Close()
+	if err := client.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatalf("set client deadline: %v", err)
+	}
+	encoder := protocol.NewEncoder(client)
+	decoder := protocol.NewDecoder(client)
+	request := protocol.NewEnvelope("IPC-COMMAND-1", protocol.MessageCommand, json.RawMessage(`{"commandId":"cmd-ipc-1","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"DRAIN","reason":"scheduled maintenance"}}`))
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("send command: %v", err)
+	}
+	response, err := decoder.Decode()
+	if err != nil {
+		t.Fatalf("read command response: %v", err)
+	}
+	var commandResult protocol.NodeCommandResponsePayload
+	if response.Type != protocol.MessageCommandResponse || response.MessageID != request.MessageID || json.Unmarshal(response.Payload, &commandResult) != nil || commandResult.Status != protocol.CommandStatusSucceeded {
+		t.Fatalf("command response=%#v result=%#v; want correlated success", response, commandResult)
+	}
+
+	replay := request
+	replay.Timestamp = "later"
+	replay.Payload = json.RawMessage(`{ "commandId" : "cmd-ipc-1", "resource" : "node", "command" : "update", "target" : { "nodeName" : "c21" }, "parameters" : { "state" : "DRAIN", "reason" : "scheduled maintenance" } }`)
+	if err := encoder.Encode(replay); err != nil {
+		t.Fatalf("send same-message replay: %v", err)
+	}
+	replayed, err := decoder.Decode()
+	if err != nil || replayed.Type != response.Type || string(replayed.Payload) != string(response.Payload) {
+		t.Fatalf("replayed response=%#v err=%v; want original response", replayed, err)
+	}
+
+	conflict := request
+	conflict.Payload = json.RawMessage(`{"commandId":"cmd-ipc-2","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"RESUME"}}`)
+	if err := encoder.Encode(conflict); err != nil {
+		t.Fatalf("send conflicting message ID: %v", err)
+	}
+	conflictResponse, err := decoder.Decode()
+	if err != nil {
+		t.Fatalf("read conflict response: %v", err)
+	}
+	var conflictError protocol.ErrorPayload
+	if conflictResponse.Type != protocol.MessageError || json.Unmarshal(conflictResponse.Payload, &conflictError) != nil || conflictError.Code != protocol.ErrorCodeMessageIDConflict {
+		t.Fatalf("conflict response=%#v error=%#v; want message-id-conflict", conflictResponse, conflictError)
+	}
+
+	executor.mu.Lock()
+	callCount, operation, nodeName, reason := executor.calls, executor.operation, executor.node, executor.reason
+	executor.mu.Unlock()
+	resolver.mu.Lock()
+	resolveCount := resolver.calls
+	resolver.mu.Unlock()
+	if callCount != 1 || operation != authorization.OperationNodeDrain || nodeName != "c21" || reason != "scheduled maintenance" || resolveCount != 1 {
+		t.Fatalf("executor calls=%d operation=%s node=%s reason=%q resolver calls=%d; want one authorized drain", callCount, operation, nodeName, reason, resolveCount)
+	}
+
+	peer, err := connection.NewConnection(client)
+	if err != nil {
+		t.Fatalf("resolve test client's peer identity: %v", err)
+	}
+	defer peer.Close()
+	record, found, err := store.Lookup(context.Background(), peer.User.UID, "cmd-ipc-1")
+	if err != nil || !found || record.Status != ledger.StatusSucceeded || record.RequestingUsername != peer.User.Username {
+		t.Fatalf("command ledger record=%#v found=%v err=%v; want succeeded caller record", record, found, err)
 	}
 }
 

@@ -319,6 +319,22 @@ func TestAuthorizationLookupFailureIsDurablyNonExecutable(t *testing.T) {
 	}
 }
 
+func TestAuthorizationIdentityMismatchNeverExecutes(t *testing.T) {
+	service, store, authorizer, executor, requester := newTestService(t, true)
+	authorizer.decision.UserContext.UID++
+	message := drainMessage("cmd-identity-mismatch", "maintenance")
+
+	response := service.Handle(context.Background(), requester, message)
+	var failure protocol.ErrorPayload
+	if response.Type != protocol.MessageError || json.Unmarshal(response.Payload, &failure) != nil || failure.Code != protocol.ErrorCodeInternal {
+		t.Fatalf("response=%#v, want fail-closed internal authorization error", response)
+	}
+	record, found, err := store.Lookup(context.Background(), requester.UID, "cmd-identity-mismatch")
+	if err != nil || !found || record.Status != ledger.StatusAuthorizationFailed || authorizer.calls != 1 || executor.calls != 0 {
+		t.Fatalf("record=%#v found=%v err=%v authorizer calls=%d executor calls=%d; want authorization-failure tombstone and no execution", record, found, err, authorizer.calls, executor.calls)
+	}
+}
+
 func TestConcurrentServicesWaitForSingleCommandOwner(t *testing.T) {
 	firstService, store, _, executor, requester := newTestService(t, true)
 	blocking := &blockingAuthorizer{
