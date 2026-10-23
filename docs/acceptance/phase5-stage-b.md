@@ -23,3 +23,14 @@ Date recorded: 2026-10-20.
 The service-account lookup is verified for `slurm_admin` only. The other permitted users' records have not been queried as `cockpit-slurm`; resolver role behavior for `none`, `operator`, and coordinator-only users is currently covered by unit tests. Capability lookup fails closed as `capability-unavailable` if the runtime query fails.
 
 No command execution or mutation UI is enabled by this stage record.
+
+## Stage B gate decision
+
+Stage B is explicitly marked passed based on the recorded protocol and authorization-contract evidence in this file.
+
+- Typed v1 command/capability protocol, strict validation behavior, and canonical error handling were implemented and tested.
+- Required operation-to-capability mappings (`node.drain` -> `nodes.drain`, `node.resume` -> `nodes.resume`) were implemented with registry consistency checks.
+- Fresh authorization resolution and fail-closed behavior were validated by tests across role and lookup-failure scenarios.
+- Capability request/response dispatch and correlation on the authenticated connection path were implemented and tested.
+
+These results satisfy the Stage B exit criteria for protocol and authorization contracts, while Stage D command execution remains gated by Stage C/D sequencing.

@@ -19,6 +19,16 @@ These values match the supplied Linux account records. The daemon trace showed s
 
 The evidence consists of operator-provided `strace` excerpts and account records. The association between each authenticated Cockpit session and its capture is operator-reported; the raw peer-credential trace alone does not identify the browser login.
 
+## Stage A gate decision
+
+Stage A target-installation identity mapping is recorded as passed for this installation evidence set.
+
+- Recorded Cockpit sessions for `slurm_none`, `slurm_operator`, `slurm_admin`, and `slurm_coord` each showed a distinct `SO_PEERCRED` UID with a matching Linux account record.
+- The daemon trace showed successful `accept4` and successful `SO_PEERCRED` retrieval for each captured connection.
+- `visitor` remained blocked at socket access preflight by policy, so no accepted connection and no peer-credential observation were expected.
+
+Based on this recorded evidence, the Stage A exit criterion requiring target-installation authenticated-user to peer-credential mapping validation is closed.
+
 ## Local Stage A verification
 
 - `go test ./...` passed.
@@ -26,3 +36,5 @@ The evidence consists of operator-provided `strace` excerpts and account records
 - `git diff --check` passed.
 
 The transport regression covers framed command dispatch and Node event delivery on one connection, correlated responses, stream cleanup, and bounded-queue overflow. No command execution or mutation UI is enabled by this record.
+
+Stage A is explicitly marked passed.
