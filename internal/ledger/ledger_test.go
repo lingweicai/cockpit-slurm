@@ -132,8 +132,8 @@ func TestOpenMigratesV1LedgerWithoutLosingRecords(t *testing.T) {
 	if err != nil || !found || record.Status != StatusSucceeded || record.RequestingUsername != "slurm_legacy" {
 		t.Fatalf("migrated record=%#v found=%v err=%v; want legacy record preserved", record, found, err)
 	}
-	if record.RequestingGID != 0 || record.RequestMessageID != "" {
-		t.Fatalf("legacy identity fields = gid %d messageId %q; want explicit unknown defaults", record.RequestingGID, record.RequestMessageID)
+	if record.RequestingGID != 0 || record.RequestMessageID != "" || record.ServiceUID != 0 || record.ServiceUsername != "" {
+		t.Fatalf("legacy identity fields = requester gid %d messageId %q service uid %d username %q; want explicit unknown defaults", record.RequestingGID, record.RequestMessageID, record.ServiceUID, record.ServiceUsername)
 	}
 }
 
@@ -844,6 +844,7 @@ func testClaim(callerUID uint32, commandID string, payload []byte) Claim {
 		RequestingUsername: "slurm_test",
 		RequestingGID:      987,
 		RequestMessageID:   "msg-" + commandID,
+		ServiceUsername:    "cockpit-slurm-test",
 		Resource:           "node",
 		Command:            "update",
 		OperationID:        "node.drain",

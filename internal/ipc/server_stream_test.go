@@ -547,7 +547,7 @@ func TestAuthenticatedCommandRunsThroughIPCServiceAndLedger(t *testing.T) {
 	}
 	defer peer.Close()
 	record, found, err := store.Lookup(context.Background(), peer.User.UID, "cmd-ipc-1")
-	if err != nil || !found || record.Status != ledger.StatusSucceeded || record.RequestingUsername != peer.User.Username || record.RequestingGID != peer.User.GID || record.RequestMessageID != request.MessageID {
+	if err != nil || !found || record.Status != ledger.StatusSucceeded || record.RequestingUsername != peer.User.Username || record.RequestingGID != peer.User.GID || record.RequestMessageID != request.MessageID || record.ServiceUID != uint32(os.Geteuid()) || record.ServiceUsername == "" {
 		t.Fatalf("command ledger record=%#v found=%v err=%v; want succeeded caller record", record, found, err)
 	}
 }

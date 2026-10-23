@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"os/user"
+	"strconv"
 	"sync"
 	"time"
 
@@ -43,14 +46,16 @@ type Ledger interface {
 }
 
 type Service struct {
-	ledger     Ledger
-	authorizer Authorizer
-	executor   NodeExecutor
-	registry   *authorization.GlobalRegistry
-	nodes      *resource.NodeCache
-	refresh    func(context.Context) error
-	locksMu    sync.Mutex
-	locks      map[string]*requestLock
+	ledger      Ledger
+	authorizer  Authorizer
+	executor    NodeExecutor
+	registry    *authorization.GlobalRegistry
+	nodes       *resource.NodeCache
+	refresh     func(context.Context) error
+	serviceUID  uint32
+	serviceUser string
+	locksMu     sync.Mutex
+	locks       map[string]*requestLock
 }
 
 func (s *Service) SetNodeRefresh(refresh func(context.Context) error) {
@@ -68,13 +73,20 @@ func NewService(store Ledger, authorizer Authorizer, executor NodeExecutor, regi
 	if store == nil || authorizer == nil || executor == nil || registry == nil || nodes == nil {
 		return nil, errors.New("command service dependencies are required")
 	}
+	serviceUID := uint32(os.Geteuid())
+	serviceUser, err := user.LookupId(strconv.Itoa(int(serviceUID)))
+	if err != nil || serviceUser == nil || serviceUser.Username == "" {
+		return nil, errors.New("daemon service identity is unavailable")
+	}
 	return &Service{
-		ledger:     store,
-		authorizer: authorizer,
-		executor:   executor,
-		registry:   registry,
-		nodes:      nodes,
-		locks:      make(map[string]*requestLock),
+		ledger:      store,
+		authorizer:  authorizer,
+		executor:    executor,
+		registry:    registry,
+		nodes:       nodes,
+		serviceUID:  serviceUID,
+		serviceUser: serviceUser.Username,
+		locks:       make(map[string]*requestLock),
 	}, nil
 }
 
@@ -146,6 +158,8 @@ func (s *Service) Handle(ctx context.Context, requester connection.UserContext, 
 		RequestingUsername: requester.Username,
 		RequestingGID:      requester.GID,
 		RequestMessageID:   message.MessageID,
+		ServiceUID:         s.serviceUID,
+		ServiceUsername:    s.serviceUser,
 		Resource:           request.Resource,
 		Command:            request.Command,
 		OperationID:        string(operationID),
