@@ -36,6 +36,7 @@ type NodeExecutor interface {
 
 type Ledger interface {
 	AdmissionBlocked() bool
+	Reconcile(context.Context) error
 	Lookup(context.Context, uint32, string) (ledger.Record, bool, error)
 	ReserveAuthorization(context.Context, ledger.Claim) (ledger.Record, bool, error)
 	Transition(context.Context, uint32, string, ledger.Status, ledger.Status, ledger.TransitionData) error
@@ -78,6 +79,9 @@ func NewService(store Ledger, authorizer Authorizer, executor NodeExecutor, regi
 }
 
 func (s *Service) Handle(ctx context.Context, requester connection.UserContext, message protocol.Envelope) protocol.Envelope {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	request, err := protocol.DecodeNodeCommandRequestPayload(message.Payload)
 	if err != nil {
 		return s.errorEnvelope(message, protocol.ErrorCodeInvalidPayload, protocol.ErrorCategoryValidation, "Invalid Node command payload", false, "")
@@ -105,7 +109,7 @@ func (s *Service) Handle(ctx context.Context, requester connection.UserContext, 
 		if !equalFingerprint(record.RequestFingerprint, fingerprint[:]) {
 			return s.errorEnvelope(message, protocol.ErrorCodeCommandIDConflict, protocol.ErrorCategoryConflict, "Command ID was already used for a different request", false, request.CommandID)
 		}
-		return s.recordResponse(message, record)
+		return s.awaitRecord(ctx, message, record, fingerprint[:])
 	}
 
 	operationID, err := operationFor(request.Parameters.State)
@@ -148,10 +152,13 @@ func (s *Service) Handle(ctx context.Context, requester connection.UserContext, 
 	}
 	record, created, err := s.ledger.ReserveAuthorization(ctx, claim)
 	if err != nil {
+		if errors.Is(err, ledger.ErrCommandIDConflict) {
+			return s.errorEnvelope(message, protocol.ErrorCodeCommandIDConflict, protocol.ErrorCategoryConflict, "Command ID was already used for a different request", false, request.CommandID)
+		}
 		return s.persistenceError(message, request.CommandID)
 	}
 	if !created {
-		return s.recordResponse(message, record)
+		return s.awaitRecord(ctx, message, record, fingerprint[:])
 	}
 
 	decision, err := s.authorizer.Authorize(ctx, requester, operationID)
@@ -316,7 +323,41 @@ func (s *Service) recordResponse(message protocol.Envelope, record ledger.Record
 	return s.errorEnvelope(message, protocol.ErrorCodeInternal, protocol.ErrorCategoryInternal, "Command result is unavailable", true, record.CommandID)
 }
 
+func (s *Service) awaitRecord(ctx context.Context, message protocol.Envelope, record ledger.Record, fingerprint []byte) protocol.Envelope {
+	for record.Status == ledger.StatusAuthorizationPending || record.Status == ledger.StatusAccepted {
+		if s.ledger.AdmissionBlocked() {
+			return s.persistenceError(message, record.CommandID)
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return s.errorEnvelope(message, protocol.ErrorCodeInternal, protocol.ErrorCategoryInternal, "Command is still being processed", true, record.CommandID)
+		case <-timer.C:
+		}
+		updated, found, err := s.ledger.Lookup(ctx, record.CallerUID, record.CommandID)
+		if err != nil {
+			return s.persistenceError(message, record.CommandID)
+		}
+		if !found {
+			return s.persistenceError(message, record.CommandID)
+		}
+		if !equalFingerprint(updated.RequestFingerprint, fingerprint) {
+			return s.errorEnvelope(message, protocol.ErrorCodeCommandIDConflict, protocol.ErrorCategoryConflict, "Command ID was already used for a different request", false, record.CommandID)
+		}
+		record = updated
+	}
+	return s.recordResponse(message, record)
+}
+
 func (s *Service) persistenceError(message protocol.Envelope, commandID string) protocol.Envelope {
+	if s.ledger.AdmissionBlocked() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := s.ledger.Reconcile(ctx); err != nil {
+			log.Printf("command ledger reconciliation failed: %v", err)
+		}
+		cancel()
+	}
 	return s.errorEnvelope(message, protocol.ErrorCodeLedgerPersistenceFailed, protocol.ErrorCategoryInternal, "Command storage is unavailable; do not retry automatically", false, commandID)
 }
 

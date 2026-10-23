@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,6 +47,94 @@ type executorStub struct {
 	node      string
 	reason    string
 	err       error
+}
+
+type blockingAuthorizer struct {
+	mu       sync.Mutex
+	calls    int
+	entered  chan struct{}
+	release  chan struct{}
+	decision authorization.Decision
+}
+
+func (a *blockingAuthorizer) Authorize(_ context.Context, _ connection.UserContext, operation authorization.OperationID) (authorization.Decision, error) {
+	a.mu.Lock()
+	a.calls++
+	a.mu.Unlock()
+	a.entered <- struct{}{}
+	<-a.release
+	decision := a.decision
+	if decision.RequiredCapability == "" {
+		if operation == authorization.OperationNodeDrain {
+			decision.RequiredCapability = identity.CapabilityNodeDrain
+		} else {
+			decision.RequiredCapability = identity.CapabilityNodeResume
+		}
+	}
+	return decision, nil
+}
+
+type observedLedger struct {
+	Ledger
+	lookedUp chan bool
+}
+
+type transitionFaultLedger struct {
+	Ledger
+	mu           sync.Mutex
+	blocked      bool
+	callerUID    uint32
+	commandID    string
+	reconcileErr error
+	expectedFrom ledger.Status
+	expectedTo   ledger.Status
+	commitFirst  bool
+}
+
+func (l *transitionFaultLedger) AdmissionBlocked() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.blocked || l.Ledger.AdmissionBlocked()
+}
+
+func (l *transitionFaultLedger) Transition(ctx context.Context, uid uint32, commandID string, expected, next ledger.Status, data ledger.TransitionData) error {
+	if expected == l.expectedFrom && next == l.expectedTo {
+		if l.commitFirst {
+			if err := l.Ledger.Transition(ctx, uid, commandID, expected, next, data); err != nil {
+				return err
+			}
+		}
+		l.mu.Lock()
+		l.blocked = true
+		l.mu.Unlock()
+		return errors.New("injected uncertain transition result")
+	}
+	return l.Ledger.Transition(ctx, uid, commandID, expected, next, data)
+}
+
+func (l *transitionFaultLedger) Reconcile(ctx context.Context) error {
+	if l.reconcileErr != nil {
+		return l.reconcileErr
+	}
+	record, found, err := l.Ledger.Lookup(ctx, l.callerUID, l.commandID)
+	if err != nil {
+		return err
+	}
+	if found && (record.Status == ledger.StatusAuthorizationPending || record.Status == ledger.StatusAccepted) {
+		if err := l.Ledger.Transition(ctx, l.callerUID, l.commandID, record.Status, ledger.StatusAuthorizationUncertain, ledger.TransitionData{}); err != nil {
+			return err
+		}
+	}
+	l.mu.Lock()
+	l.blocked = false
+	l.mu.Unlock()
+	return nil
+}
+
+func (l observedLedger) Lookup(ctx context.Context, callerUID uint32, commandID string) (ledger.Record, bool, error) {
+	record, found, err := l.Ledger.Lookup(ctx, callerUID, commandID)
+	l.lookedUp <- found && err == nil
+	return record, found, err
 }
 
 func (e *executorStub) Identity() ExecutionIdentity { return e.identity }
@@ -129,6 +218,50 @@ func TestDeniedCommandPersistsTombstoneWithoutExecution(t *testing.T) {
 	}
 }
 
+func TestHandleAuthorizedResumeUsesFixedOperation(t *testing.T) {
+	service, store, authorizer, executor, requester := newTestService(t, true)
+	message := resumeMessage("cmd-resume-1")
+	response := service.Handle(context.Background(), requester, message)
+	if response.Type != protocol.MessageCommandResponse {
+		t.Fatalf("response = %#v, want command response", response)
+	}
+	if authorizer.calls != 1 || executor.calls != 1 || executor.operation != authorization.OperationNodeResume || executor.node != "c21" || executor.reason != "" {
+		t.Fatalf("authorizer calls=%d executor=%#v; want one fixed resume operation", authorizer.calls, executor)
+	}
+	record, found, err := store.Lookup(context.Background(), requester.UID, "cmd-resume-1")
+	if err != nil || !found || record.Status != ledger.StatusSucceeded || record.OperationID != string(authorization.OperationNodeResume) {
+		t.Fatalf("resume record=%#v found=%v err=%v", record, found, err)
+	}
+}
+
+func TestExecutionFailureAndUnknownOutcomeArePersistedSeparately(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		commandID     string
+		executionErr  error
+		wantStatus    ledger.Status
+		wantErrorCode protocol.ErrorCode
+	}{
+		{name: "definite failure", commandID: "cmd-definite-failure", executionErr: errors.New("helper reports Slurm failure"), wantStatus: ledger.StatusFailed, wantErrorCode: protocol.ErrorCodeSlurmCommandFailed},
+		{name: "unknown outcome", commandID: "cmd-unknown-outcome", executionErr: ErrExecutionOutcomeUnknown, wantStatus: ledger.StatusUnknown, wantErrorCode: protocol.ErrorCodeCommandOutcomeUnknown},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, store, _, executor, requester := newTestService(t, true)
+			executor.err = test.executionErr
+			message := resumeMessage(test.commandID)
+			response := service.Handle(context.Background(), requester, message)
+			var failure protocol.ErrorPayload
+			if response.Type != protocol.MessageError || json.Unmarshal(response.Payload, &failure) != nil || failure.Code != test.wantErrorCode {
+				t.Fatalf("response=%#v failure=%#v; want error %s", response, failure, test.wantErrorCode)
+			}
+			record, found, err := store.Lookup(context.Background(), requester.UID, test.commandID)
+			if err != nil || !found || record.Status != test.wantStatus || executor.calls != 1 {
+				t.Fatalf("record=%#v found=%v err=%v executor calls=%d; want %s", record, found, err, executor.calls, test.wantStatus)
+			}
+		})
+	}
+}
+
 func TestInvalidTargetDoesNotClaimOrAuthorize(t *testing.T) {
 	service, store, authorizer, executor, requester := newTestService(t, true)
 	cache := resource.NewNodeCache()
@@ -186,6 +319,137 @@ func TestAuthorizationLookupFailureIsDurablyNonExecutable(t *testing.T) {
 	}
 }
 
+func TestConcurrentServicesWaitForSingleCommandOwner(t *testing.T) {
+	firstService, store, _, executor, requester := newTestService(t, true)
+	blocking := &blockingAuthorizer{
+		entered: make(chan struct{}, 2),
+		release: make(chan struct{}),
+		decision: authorization.Decision{
+			Allowed: true,
+			UserContext: connection.UserContext{
+				UID: requester.UID, GID: requester.GID, Username: requester.Username, AdminLevel: "admin",
+				Capabilities: map[string]bool{identity.CapabilityNodeDrain: true},
+			},
+		},
+	}
+	firstService.authorizer = blocking
+	secondService, err := NewService(observedLedger{Ledger: store, lookedUp: make(chan bool, 1)}, blocking, executor, firstService.registry, firstService.nodes)
+	if err != nil {
+		t.Fatalf("create second command service: %v", err)
+	}
+	ledgerObserver := secondService.ledger.(observedLedger)
+	message := drainMessage("cmd-concurrent-1", "maintenance")
+	firstResponse := make(chan protocol.Envelope, 1)
+	secondResponse := make(chan protocol.Envelope, 1)
+	go func() { firstResponse <- firstService.Handle(context.Background(), requester, message) }()
+	<-blocking.entered
+	go func() {
+		secondResponse <- secondService.Handle(context.Background(), requester, drainMessage("cmd-concurrent-1", "maintenance"))
+	}()
+	if found := <-ledgerObserver.lookedUp; !found {
+		t.Fatal("second request did not observe the existing command claim")
+	}
+
+	close(blocking.release)
+	responses := []protocol.Envelope{<-firstResponse, <-secondResponse}
+	for _, response := range responses {
+		if response.Type != protocol.MessageCommandResponse {
+			t.Fatalf("concurrent response = %#v, want command response", response)
+		}
+	}
+	blocking.mu.Lock()
+	authorizerCalls := blocking.calls
+	blocking.mu.Unlock()
+	if authorizerCalls != 1 || executor.calls != 1 {
+		t.Fatalf("authorizer calls=%d executor calls=%d, want exactly one each", authorizerCalls, executor.calls)
+	}
+}
+
+func TestConcurrentConflictingFingerprintReturnsCommandIDConflict(t *testing.T) {
+	firstService, store, _, executor, requester := newTestService(t, true)
+	blocking := &blockingAuthorizer{
+		entered: make(chan struct{}, 2),
+		release: make(chan struct{}),
+		decision: authorization.Decision{
+			Allowed:     true,
+			UserContext: connection.UserContext{UID: requester.UID, GID: requester.GID, Username: requester.Username, AdminLevel: "admin"},
+		},
+	}
+	firstService.authorizer = blocking
+	secondService, err := NewService(store, blocking, executor, firstService.registry, firstService.nodes)
+	if err != nil {
+		t.Fatalf("create second command service: %v", err)
+	}
+	firstResponse := make(chan protocol.Envelope, 1)
+	go func() {
+		firstResponse <- firstService.Handle(context.Background(), requester, drainMessage("cmd-conflict-race", "maintenance"))
+	}()
+	<-blocking.entered
+	secondMessage := drainMessage("cmd-conflict-race", "different maintenance")
+	secondResponse := secondService.Handle(context.Background(), requester, secondMessage)
+	var failure protocol.ErrorPayload
+	if secondResponse.Type != protocol.MessageError || json.Unmarshal(secondResponse.Payload, &failure) != nil || failure.Code != protocol.ErrorCodeCommandIDConflict {
+		t.Fatalf("conflicting response=%#v, want command-id-conflict", secondResponse)
+	}
+	close(blocking.release)
+	if response := <-firstResponse; response.Type != protocol.MessageCommandResponse {
+		t.Fatalf("owner response = %#v, want command response", response)
+	}
+	blocking.mu.Lock()
+	authorizerCalls := blocking.calls
+	blocking.mu.Unlock()
+	if authorizerCalls != 1 || executor.calls != 1 {
+		t.Fatalf("authorizer calls=%d executor calls=%d, want exactly one each", authorizerCalls, executor.calls)
+	}
+}
+
+func TestUncertainAuthorizationTransitionNeverDispatches(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		commitFirst bool
+	}{
+		{name: "commit before error", commitFirst: true},
+		{name: "pre-commit error", commitFirst: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, store, authorizer, executor, requester := newTestService(t, true)
+			faultLedger := &transitionFaultLedger{
+				Ledger: store, expectedFrom: ledger.StatusAuthorizationPending,
+				expectedTo: ledger.StatusAccepted, commitFirst: test.commitFirst,
+				callerUID: requester.UID, commandID: "cmd-transition-fault",
+			}
+			service.ledger = faultLedger
+			message := drainMessage("cmd-transition-fault", "maintenance")
+			response := service.Handle(context.Background(), requester, message)
+			var failure protocol.ErrorPayload
+			if response.Type != protocol.MessageError || json.Unmarshal(response.Payload, &failure) != nil || failure.Code != protocol.ErrorCodeLedgerPersistenceFailed {
+				t.Fatalf("response=%#v failure=%#v; want ledger-persistence-failed", response, failure)
+			}
+			if authorizer.calls != 1 || executor.calls != 0 || faultLedger.AdmissionBlocked() {
+				t.Fatalf("authorizer calls=%d executor calls=%d admission blocked=%v", authorizer.calls, executor.calls, faultLedger.AdmissionBlocked())
+			}
+			record, found, err := store.Lookup(context.Background(), requester.UID, "cmd-transition-fault")
+			if err != nil || !found || record.Status != ledger.StatusAuthorizationUncertain {
+				t.Fatalf("record=%#v found=%v err=%v; want quarantined authorization_uncertain", record, found, err)
+			}
+		})
+	}
+
+	t.Run("reconciliation failure leaves admission blocked", func(t *testing.T) {
+		service, store, authorizer, executor, requester := newTestService(t, true)
+		faultLedger := &transitionFaultLedger{
+			Ledger: store, expectedFrom: ledger.StatusAuthorizationPending,
+			expectedTo: ledger.StatusAccepted, callerUID: requester.UID,
+			commandID: "cmd-reconcile-failure", reconcileErr: errors.New("integrity check failed"),
+		}
+		service.ledger = faultLedger
+		response := service.Handle(context.Background(), requester, drainMessage("cmd-reconcile-failure", "maintenance"))
+		if response.Type != protocol.MessageError || !faultLedger.AdmissionBlocked() || executor.calls != 0 || authorizer.calls != 1 {
+			t.Fatalf("response=%#v admission blocked=%v authorizer calls=%d executor calls=%d", response, faultLedger.AdmissionBlocked(), authorizer.calls, executor.calls)
+		}
+	})
+}
+
 func newTestService(t *testing.T, allowed bool) (*Service, *ledger.Ledger, *authorizerStub, *executorStub, connection.UserContext) {
 	t.Helper()
 	store, err := ledger.Open(filepath.Join(t.TempDir(), "commands.db"))
@@ -233,6 +497,17 @@ func drainMessage(commandID, reason string) protocol.Envelope {
 			State:  "DRAIN",
 			Reason: &reason,
 		},
+	})
+	return protocol.NewEnvelope("message-"+commandID, protocol.MessageCommand, payload)
+}
+
+func resumeMessage(commandID string) protocol.Envelope {
+	payload, _ := json.Marshal(protocol.NodeCommandRequestPayload{
+		CommandID:  commandID,
+		Resource:   "node",
+		Command:    "update",
+		Target:     protocol.NodeCommandTarget{NodeName: "c21"},
+		Parameters: protocol.NodeCommandParameters{State: "RESUME"},
 	})
 	return protocol.NewEnvelope("message-"+commandID, protocol.MessageCommand, payload)
 }

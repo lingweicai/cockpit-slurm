@@ -49,6 +49,71 @@ func TestServerUsesEnvironmentSocketOverride(t *testing.T) {
 	}
 }
 
+func TestRequestReplayCacheReturnsResponseForEquivalentReplay(t *testing.T) {
+	cache := &requestReplayCache{}
+	dispatchCalls := 0
+	message := protocol.NewEnvelope("message-1", protocol.MessageCommand, json.RawMessage(`{"state":"DRAIN","node":"c21"}`))
+	firstResponse, closeConnection := cache.Dispatch(message, func() protocol.Envelope {
+		dispatchCalls++
+		return protocol.NewEnvelope(message.MessageID, protocol.MessageCommandResponse, json.RawMessage(`{"status":"succeeded"}`))
+	})
+	if closeConnection {
+		t.Fatal("first request unexpectedly closed the connection")
+	}
+
+	replay := message
+	replay.Timestamp = "later"
+	replay.Payload = json.RawMessage(`{ "node" : "c21", "state" : "DRAIN" }`)
+	secondResponse, closeConnection := cache.Dispatch(replay, func() protocol.Envelope {
+		dispatchCalls++
+		return protocol.NewEnvelope(replay.MessageID, protocol.MessageCommandResponse, json.RawMessage(`{"status":"unexpected"}`))
+	})
+	if closeConnection || dispatchCalls != 1 || secondResponse.Payload == nil || string(secondResponse.Payload) != string(firstResponse.Payload) {
+		t.Fatalf("replay response=%#v close=%v dispatches=%d; want cached response and one dispatch", secondResponse, closeConnection, dispatchCalls)
+	}
+}
+
+func TestRequestReplayCacheRejectsMessageIDConflictWithoutDispatch(t *testing.T) {
+	cache := &requestReplayCache{}
+	dispatchCalls := 0
+	message := protocol.NewEnvelope("message-conflict", protocol.MessageCommand, json.RawMessage(`{"state":"DRAIN"}`))
+	cache.Dispatch(message, func() protocol.Envelope {
+		dispatchCalls++
+		return protocol.NewEnvelope(message.MessageID, protocol.MessageCommandResponse, json.RawMessage(`{}`))
+	})
+	conflicting := message
+	conflicting.Payload = json.RawMessage(`{"state":"RESUME"}`)
+	response, closeConnection := cache.Dispatch(conflicting, func() protocol.Envelope {
+		dispatchCalls++
+		return protocol.NewEnvelope(conflicting.MessageID, protocol.MessageCommandResponse, json.RawMessage(`{}`))
+	})
+	var failure protocol.ErrorPayload
+	if closeConnection || response.Type != protocol.MessageError || json.Unmarshal(response.Payload, &failure) != nil || failure.Code != protocol.ErrorCodeMessageIDConflict || dispatchCalls != 1 {
+		t.Fatalf("response=%#v failure=%#v close=%v dispatches=%d; want message-id-conflict without redispatch", response, failure, closeConnection, dispatchCalls)
+	}
+}
+
+func TestRequestReplayCacheClosesConnectionAtCapacity(t *testing.T) {
+	cache := &requestReplayCache{}
+	for index := 0; index < maxCachedRequestsPerConnection; index++ {
+		message := protocol.NewEnvelope(fmt.Sprintf("message-%d", index), protocol.MessagePing, json.RawMessage(`{}`))
+		_, closeConnection := cache.Dispatch(message, func() protocol.Envelope {
+			return protocol.NewEnvelope(message.MessageID, protocol.MessagePong, json.RawMessage(`{}`))
+		})
+		if closeConnection {
+			t.Fatalf("connection closed before reaching cache capacity at request %d", index)
+		}
+	}
+	message := protocol.NewEnvelope("message-over-capacity", protocol.MessagePing, json.RawMessage(`{}`))
+	_, closeConnection := cache.Dispatch(message, func() protocol.Envelope {
+		t.Fatal("request beyond cache capacity was dispatched")
+		return protocol.Envelope{}
+	})
+	if !closeConnection {
+		t.Fatal("connection remained open after exhausting replay-cache capacity")
+	}
+}
+
 func TestServerListenAndClose(t *testing.T) {
 	socketDir := filepath.Join(t.TempDir(), "ipc")
 	socketPath := filepath.Join(socketDir, "cockpit-slurm.sock")

@@ -28,6 +28,20 @@ func (transportCommandHandler) Handle(_ context.Context, message protocol.Envelo
 	return protocol.NewEnvelope(message.MessageID, protocol.MessageCommandResponse, json.RawMessage(`{"result":"transport-test"}`))
 }
 
+type countingCommandHandler struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (h *countingCommandHandler) Handle(_ context.Context, message protocol.Envelope) protocol.Envelope {
+	h.mu.Lock()
+	h.calls++
+	calls := h.calls
+	h.mu.Unlock()
+	payload, _ := json.Marshal(map[string]int{"calls": calls})
+	return protocol.NewEnvelope(message.MessageID, protocol.MessageCommandResponse, payload)
+}
+
 type capabilityResolverForIPC struct {
 	requester chan connection.UserContext
 }
@@ -202,6 +216,75 @@ func TestNodeStreamConnectionDispatchesWhilePublishingEvents(t *testing.T) {
 	}
 	if !gotCommandResponse || !gotChanges {
 		t.Fatalf("received command response=%t changes=%t, want both", gotCommandResponse, gotChanges)
+	}
+}
+
+func TestIPCConnectionReplaysMessageResponseAndRejectsMessageIDConflict(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "cockpit-slurm.sock")
+	server := NewServer(socketPath)
+	handler := &countingCommandHandler{}
+	if err := server.dispatcher.Register(protocol.MessageCommand, handler); err != nil {
+		t.Fatalf("register command handler: %v", err)
+	}
+	if err := server.Listen(); err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = server.Serve(ctx) }()
+
+	client, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Dial returned error: %v", err)
+	}
+	defer client.Close()
+	if err := client.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set client deadline: %v", err)
+	}
+	encoder := protocol.NewEncoder(client)
+	decoder := protocol.NewDecoder(client)
+	request := protocol.NewEnvelope("REPLAY-1", protocol.MessageCommand, json.RawMessage(`{"operation":"drain","node":"c21"}`))
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("send initial command: %v", err)
+	}
+	initialResponse, err := decoder.Decode()
+	if err != nil {
+		t.Fatalf("read initial command response: %v", err)
+	}
+
+	replay := request
+	replay.Timestamp = "later"
+	replay.Payload = json.RawMessage(`{ "node" : "c21", "operation" : "drain" }`)
+	if err := encoder.Encode(replay); err != nil {
+		t.Fatalf("send replay: %v", err)
+	}
+	replayResponse, err := decoder.Decode()
+	if err != nil {
+		t.Fatalf("read replay response: %v", err)
+	}
+	if replayResponse.Type != initialResponse.Type || string(replayResponse.Payload) != string(initialResponse.Payload) {
+		t.Fatalf("replay response=%#v, initial response=%#v; want identical cached response", replayResponse, initialResponse)
+	}
+
+	conflict := request
+	conflict.Payload = json.RawMessage(`{"operation":"resume","node":"c21"}`)
+	if err := encoder.Encode(conflict); err != nil {
+		t.Fatalf("send conflicting message ID: %v", err)
+	}
+	conflictResponse, err := decoder.Decode()
+	if err != nil {
+		t.Fatalf("read message ID conflict response: %v", err)
+	}
+	var failure protocol.ErrorPayload
+	if conflictResponse.Type != protocol.MessageError || json.Unmarshal(conflictResponse.Payload, &failure) != nil || failure.Code != protocol.ErrorCodeMessageIDConflict {
+		t.Fatalf("conflict response=%#v failure=%#v, want message-id-conflict", conflictResponse, failure)
+	}
+	handler.mu.Lock()
+	calls := handler.calls
+	handler.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("command handler calls = %d, want 1", calls)
 	}
 }
 

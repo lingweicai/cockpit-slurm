@@ -1,7 +1,10 @@
 package ipc
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +22,7 @@ import (
 )
 
 const DefaultSocketPath = "/run/cockpit-slurm/cockpit-slurm.sock"
+const maxCachedRequestsPerConnection = 4096
 
 func socketPathFromEnv() string {
 	if path := os.Getenv("COCKPIT_SLURM_SOCKET_PATH"); path != "" {
@@ -35,6 +39,65 @@ var ErrSocketInUse = errors.New("unix socket is already in use")
 type outboundMessage struct {
 	envelope protocol.Envelope
 	written  chan error
+}
+
+type cachedRequest struct {
+	fingerprint [sha256.Size]byte
+	response    protocol.Envelope
+}
+
+type requestReplayCache struct {
+	entries map[string]cachedRequest
+}
+
+func (c *requestReplayCache) Dispatch(message protocol.Envelope, dispatch func() protocol.Envelope) (protocol.Envelope, bool) {
+	fingerprint, err := requestFingerprint(message)
+	if err != nil {
+		return protocol.NewErrorEnvelope(message.MessageID, protocol.ErrorPayload{
+			Code: protocol.ErrorCodeInvalidPayload, Category: protocol.ErrorCategoryValidation,
+			Message: "Invalid protocol message", Retryable: false,
+		}), false
+	}
+	if c.entries == nil {
+		c.entries = make(map[string]cachedRequest)
+	}
+	if previous, exists := c.entries[message.MessageID]; exists {
+		if previous.fingerprint == fingerprint {
+			return previous.response, false
+		}
+		return protocol.NewErrorEnvelope(message.MessageID, protocol.ErrorPayload{
+			Code: protocol.ErrorCodeMessageIDConflict, Category: protocol.ErrorCategoryConflict,
+			Message: "Message ID was already used for a different request", Retryable: false,
+		}), false
+	}
+	if len(c.entries) >= maxCachedRequestsPerConnection {
+		return protocol.NewErrorEnvelope(message.MessageID, protocol.ErrorPayload{
+			Code: protocol.ErrorCodeInternal, Category: protocol.ErrorCategoryInternal,
+			Message: "Connection request limit reached", Retryable: false,
+		}), true
+	}
+	response := dispatch()
+	c.entries[message.MessageID] = cachedRequest{fingerprint: fingerprint, response: response}
+	return response, false
+}
+
+func requestFingerprint(message protocol.Envelope) ([sha256.Size]byte, error) {
+	var payload any
+	decoder := json.NewDecoder(bytes.NewReader(message.Payload))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	canonical, err := json.Marshal(struct {
+		Protocol string               `json:"protocol"`
+		Version  string               `json:"version"`
+		Type     protocol.MessageType `json:"type"`
+		Payload  any                  `json:"payload"`
+	}{Protocol: message.Protocol, Version: message.Version, Type: message.Type, Payload: payload})
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return sha256.Sum256(canonical), nil
 }
 
 // Server provides a Unix-domain socket listener for cockpit-slurm.
@@ -217,6 +280,7 @@ func (s *Server) serveConnection(conn net.Conn) {
 	}
 
 	decoder := protocol.NewDecoder(conn)
+	replayCache := &requestReplayCache{}
 	for {
 		if connState.Context.Err() != nil {
 			return
@@ -233,8 +297,14 @@ func (s *Server) serveConnection(conn net.Conn) {
 			return
 		}
 
-		response := s.dispatcher.DispatchWithUser(connState.Context, connState.User, message)
+		response, closeAfterResponse := replayCache.Dispatch(message, func() protocol.Envelope {
+			return s.dispatcher.DispatchWithUser(connState.Context, connState.User, message)
+		})
 		if !enqueue(response) {
+			_ = connState.Close()
+			return
+		}
+		if closeAfterResponse {
 			_ = connState.Close()
 			return
 		}
