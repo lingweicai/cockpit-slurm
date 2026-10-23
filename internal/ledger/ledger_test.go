@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"errors"
@@ -180,6 +181,23 @@ func TestOpenRejectsNewerSchemaAndCorruptDatabase(t *testing.T) {
 			t.Fatal("Open() accepted a corrupt database")
 		}
 	})
+}
+
+func TestLookupFailureBlocksCommandAdmission(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "commands.db"))
+	if err != nil {
+		t.Fatalf("open ledger: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close ledger: %v", err)
+	}
+
+	if _, _, err := store.Lookup(context.Background(), 1008, "cmd-read-failure"); err == nil {
+		t.Fatal("Lookup() succeeded against a closed database")
+	}
+	if !store.AdmissionBlocked() {
+		t.Fatal("ledger admission is not blocked after an operational read failure")
+	}
 }
 
 func TestReserveAuthorizationIsCallerScopedAndFingerprintSensitive(t *testing.T) {

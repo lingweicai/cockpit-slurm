@@ -346,6 +346,7 @@ func TestDecodeNodeCommandRequestPayload(t *testing.T) {
 
 	invalid := []string{
 		`{"commandId":"cmd-1","resource":"node","resource":"jobs","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"RESUME"}}`,
+		`{"commandId":"cmd!1","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"RESUME"}}`,
 		`{"commandId":"cmd-1","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"DRAIN"}}`,
 		`{"commandId":"cmd-1","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"DRAIN","reason":null}}`,
 		`{"commandId":"cmd-1","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"RESUME","reason":"unexpected"}}`,
@@ -353,6 +354,7 @@ func TestDecodeNodeCommandRequestPayload(t *testing.T) {
 		`{"commandId":"cmd-1","resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"POWER"}}`,
 		`{"commandId":"cmd-1","resource":"node","command":"update","target":{"nodeName":"c21","extra":true},"parameters":{"state":"RESUME"}}`,
 	}
+	invalid = append(invalid, fmt.Sprintf(`{"commandId":%q,"resource":"node","command":"update","target":{"nodeName":"c21"},"parameters":{"state":"RESUME"}}`, strings.Repeat("a", 129)))
 	for _, input := range invalid {
 		if _, err := DecodeNodeCommandRequestPayload(json.RawMessage(input)); err == nil {
 			t.Errorf("accepted invalid command request %s", input)

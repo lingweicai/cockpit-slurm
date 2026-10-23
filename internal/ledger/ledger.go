@@ -238,13 +238,19 @@ func (l *Ledger) Lookup(ctx context.Context, callerUID uint32, commandID string)
 	if l == nil || l.db == nil {
 		return Record{}, false, ErrPersistenceFailed
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var record Record
 	err := scanRecord(l.db.QueryRowContext(ctx, `SELECT `+recordColumns+` FROM commands WHERE caller_uid = ? AND command_id = ? AND expires_at > ?`, callerUID, commandID, time.Now().UTC().Unix()), &record)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Record{}, false, nil
 	}
-	if err != nil {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return Record{}, false, fmt.Errorf("read command ledger record: %w", err)
+	}
+	if err != nil {
+		return Record{}, false, l.blockPersistence("read command ledger record", err)
 	}
 	return record, true, nil
 }

@@ -123,7 +123,7 @@ func DecodeNodeCommandRequestPayload(payload json.RawMessage) (NodeCommandReques
 			State: wire.Parameters.State,
 		},
 	}
-	if request.CommandID == "" || request.Resource != "node" || request.Command != "update" {
+	if !validCommandID(request.CommandID) || request.Resource != "node" || request.Command != "update" {
 		return NodeCommandRequestPayload{}, fmt.Errorf("%w: unsupported Node command", ErrInvalidMessage)
 	}
 	if request.Target.NodeName == "" || len(request.Target.NodeName) > 255 {
@@ -155,6 +155,19 @@ func DecodeNodeCommandRequestPayload(payload json.RawMessage) (NodeCommandReques
 		return NodeCommandRequestPayload{}, fmt.Errorf("%w: unsupported Node state", ErrInvalidMessage)
 	}
 	return request, nil
+}
+
+func validCommandID(commandID string) bool {
+	if commandID == "" || len(commandID) > 128 {
+		return false
+	}
+	for _, char := range commandID {
+		if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '-' || char == '_' || char == '.') {
+			return false
+		}
+	}
+	return true
 }
 
 func DecodeNodeCommandResponsePayload(payload json.RawMessage) (NodeCommandResponsePayload, error) {

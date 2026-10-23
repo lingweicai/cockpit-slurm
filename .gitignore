@@ -38,3 +38,4 @@
 /test/static-code
 # executable
 cmd/cockpit-slurm/cockpit-slurm
+cmd/cockpit-slurm-node-helper/cockpit-slurm-node-helper
