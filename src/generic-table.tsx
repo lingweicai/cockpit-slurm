@@ -16,6 +16,8 @@ export interface GenericTableColumn<T> {
     key: string;
     header: React.ReactNode;
     render: (item: T) => React.ReactNode;
+    screenReaderText?: string;
+    isAction?: boolean;
 }
 
 export interface GenericTableProps<T> {
@@ -55,16 +57,28 @@ export function GenericTable<T>({
                 <Table aria-label={ ariaLabel } variant='compact'>
                     <Thead>
                         <Tr>
-                            { columns.map(column => <Th key={ column.key }>{ column.header }</Th>) }
+                            { columns.map(column => {
+                                const screenReaderTextProps = column.screenReaderText === undefined
+                                    ? {}
+                                    : { screenReaderText: column.screenReaderText };
+                                return <Th key={ column.key } { ...screenReaderTextProps }>{ column.header }</Th>;
+                            }) }
                         </Tr>
                     </Thead>
                     <Tbody>
                         { items.map(item => (
                             <Tr key={ rowKey(item) }>
                                 { columns.map(column => {
-                                    const dataLabel = typeof column.header === 'string' ? column.header : undefined;
+                                    const dataLabel = column.isAction
+                                        ? undefined
+                                        : typeof column.header === 'string' ? column.header : undefined;
                                     const dataLabelProps = dataLabel === undefined ? {} : { dataLabel };
-                                    return <Td key={ column.key } { ...dataLabelProps }>{ column.render(item) }</Td>;
+                                    const actionCellProps = column.isAction ? { isActionCell: true } : {};
+                                    return (
+                                        <Td key={ column.key } { ...dataLabelProps } { ...actionCellProps }>
+                                            { column.render(item) }
+                                        </Td>
+                                    );
                                 }) }
                             </Tr>
                         )) }

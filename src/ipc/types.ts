@@ -20,6 +20,42 @@ export interface Envelope<TPayload = JsonValue | null | undefined> {
   [key: string]: unknown;
 }
 
+export interface IpcSendOptions {
+  timeoutMs?: number;
+}
+
+export interface NodeCapabilities {
+  'nodes.drain': boolean;
+  'nodes.resume': boolean;
+}
+
+export interface NodeCommandRequestPayload {
+  commandId: string;
+  resource: 'node';
+  command: 'update';
+  target: { nodeName: string };
+  parameters: { state: 'DRAIN' | 'RESUME'; reason?: string };
+}
+
+export type NodeCommandStatus = 'running' | 'succeeded' | 'failed' | 'denied' | 'unknown';
+
+export interface NodeCommandResponsePayload {
+  commandId: string;
+  resource: 'node';
+  command: 'update';
+  target?: { nodeName: string };
+  parameters?: { state: 'DRAIN' | 'RESUME'; reason?: string };
+  status: NodeCommandStatus;
+}
+
+export interface ProtocolErrorPayload {
+  code: string;
+  category: string;
+  message: string;
+  retryable: boolean;
+  commandId?: string;
+}
+
 export interface NodeStreamNode {
   metadata: {
     name: string;
