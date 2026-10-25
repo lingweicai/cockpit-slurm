@@ -28,6 +28,11 @@ function isDrained(node: NodeResource): boolean {
     return node.status.state === 'DRAIN' || node.status.stateFlags?.includes('DRAIN') === true;
 }
 
+function formatNodeState(node: NodeResource): string {
+    const states = [node.status.state, ...(node.status.stateFlags ?? [])].filter(Boolean);
+    return states.length > 0 ? states.join('+') : 'Unknown';
+}
+
 function isCommandActive(status: NodeCommandDisplayState['status'] | undefined): boolean {
     return status === 'pending' || status === 'running' || status === 'unknown';
 }
@@ -104,7 +109,7 @@ export const NodeTable = () => {
 
     const columns: GenericTableColumn<NodeResource>[] = [
         { key: 'name', header: 'Node', render: node => node.metadata.name },
-        { key: 'state', header: 'State', render: node => node.status.state || 'Unknown' },
+        { key: 'state', header: 'State', render: formatNodeState },
         { key: 'reason', header: 'Reason', render: node => node.status.reason || '—' },
         { key: 'cpu-load', header: 'CPU Load', render: node => node.spec.cpuLoad ?? '—' },
         { key: 'real-memory', header: 'Real Memory', render: node => formatMemory(node.spec.realMemory) },
