@@ -5,6 +5,11 @@ import { CommandService, IpcCommandError } from './ipc/command-service';
 import { createIpcClient, type IpcClient } from './ipc/client';
 import { applyNodeStreamMessage, type NodeStreamState } from './ipc/node-stream';
 import {
+    commandFailureStatus,
+    nodeCommandBlockReason,
+    type NodeCommandDisplayState,
+} from './node-command-state';
+import {
     type IpcChannel,
     type NodeCapabilities,
     type NodeCommandResponsePayload,
@@ -13,13 +18,6 @@ import {
 } from './ipc/types';
 
 export type NodeResource = NodeStreamNode;
-
-export interface NodeCommandDisplayState {
-    action: 'DRAIN' | 'RESUME';
-    status: 'pending' | NodeCommandStatus;
-    commandId?: string;
-    error?: string;
-}
 
 export interface NodeProviderValue {
     nodes: NodeResource[];
@@ -49,25 +47,6 @@ const NodeContext = createContext<NodeProviderValue | null>(null);
 const INITIAL_RECONNECT_DELAY_MS = 500;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 const SNAPSHOT_TIMEOUT_MS = 10_000;
-
-function isDrained(node: NodeResource): boolean {
-    return node.status.state === 'DRAIN' || node.status.stateFlags?.includes('DRAIN') === true;
-}
-
-function commandFailureStatus(error: Error): NodeCommandDisplayState['status'] {
-    if (!(error instanceof IpcCommandError)) {
-        return 'unknown';
-    }
-    if (error.code === 'authorization-denied') {
-        return 'denied';
-    }
-    if (error.code === 'command-outcome-unknown' ||
-        error.code === 'command-timeout' ||
-        error.code === 'ledger-persistence-failed') {
-        return 'unknown';
-    }
-    return 'failed';
-}
 
 export const NodeProvider = ({ socketPath, createChannel: makeChannel = createChannel, children }: NodeProviderProps) => {
     const [nodes, setNodes] = useState<NodeResource[]>([]);
@@ -315,11 +294,21 @@ export const NodeProvider = ({ socketPath, createChannel: makeChannel = createCh
         reason?: string,
     ): Promise<NodeCommandResponsePayload> => {
         const currentService = commandService.current;
-        if (!connected || !currentService || !capabilities || capabilitiesLoading) {
-            throw new Error('Node commands are unavailable until connection capabilities are loaded');
+        if (!currentService) {
+            throw new Error('IPC connection is not ready');
         }
-        const capability = action === 'DRAIN' ? capabilities['nodes.drain'] : capabilities['nodes.resume'];
-        if (!capability) {
+        const node = nodes.find(item => item.spec.nodeName === nodeName);
+        const blockReason = nodeCommandBlockReason({
+            node,
+            action,
+            capabilities,
+            capabilitiesLoading,
+            connected,
+            command: commandStates[nodeName],
+            commandInFlight: commandsInFlight.current.has(nodeName),
+        });
+        if (blockReason && capabilities && !capabilitiesLoading &&
+            !(action === 'DRAIN' ? capabilities['nodes.drain'] : capabilities['nodes.resume'])) {
             throw new IpcCommandError({
                 code: 'authorization-denied',
                 category: 'authorization-error',
@@ -327,21 +316,8 @@ export const NodeProvider = ({ socketPath, createChannel: makeChannel = createCh
                 retryable: false,
             });
         }
-        const node = nodes.find(item => item.spec.nodeName === nodeName);
-        if (!node) {
-            throw new Error(`Node ${nodeName} is not in the current authoritative snapshot`);
-        }
-        const state = node.status.state;
-        const applicable = action === 'DRAIN'
-            ? state === 'IDLE' && !isDrained(node)
-            : isDrained(node);
-        if (!applicable) {
-            throw new Error(`${action} is not applicable to the latest observed state of ${nodeName}`);
-        }
-        const existing = commandStates[nodeName];
-        if (commandsInFlight.current.has(nodeName) || existing?.status === 'pending' ||
-            existing?.status === 'running' || existing?.status === 'unknown') {
-            throw new Error(`A command for ${nodeName} is already pending or has an unknown outcome`);
+        if (blockReason) {
+            throw new Error(blockReason);
         }
 
         commandsInFlight.current.add(nodeName);

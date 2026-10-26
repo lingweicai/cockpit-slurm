@@ -11,9 +11,11 @@ import { TextArea } from '@patternfly/react-core/dist/esm/components/TextArea/in
 import { ActionsColumn } from '@patternfly/react-table';
 
 import { GenericTable, type GenericTableColumn } from './generic-table';
-import { type NodeCommandDisplayState, type NodeResource, useNodes } from './node-provider';
-
-type NodeAction = 'DRAIN' | 'RESUME';
+import {
+    availableNodeActions,
+    commandStatusText,
+} from './node-command-state';
+import { type NodeResource, useNodes } from './node-provider';
 
 interface ConfirmationDialog {
     nodeName: string;
@@ -24,24 +26,9 @@ function formatMemory(value: number | undefined): string {
     return value === undefined ? '—' : `${value} MiB`;
 }
 
-function isDrained(node: NodeResource): boolean {
-    return node.status.state === 'DRAIN' || node.status.stateFlags?.includes('DRAIN') === true;
-}
-
 function formatNodeState(node: NodeResource): string {
     const states = [node.status.state, ...(node.status.stateFlags ?? [])].filter(Boolean);
     return states.length > 0 ? states.join('+') : 'Unknown';
-}
-
-function isCommandActive(status: NodeCommandDisplayState['status'] | undefined): boolean {
-    return status === 'pending' || status === 'running' || status === 'unknown';
-}
-
-function commandStatusText(command: NodeCommandDisplayState): string {
-    if (command.status === 'pending') {
-        return `Submitting ${command.action.toLowerCase()}`;
-    }
-    return `${command.action.toLowerCase()}: ${command.status}`;
 }
 
 function hasControlCharacters(value: string): boolean {
@@ -142,13 +129,15 @@ export const NodeTable = () => {
             render: node => {
                 const nodeName = node.spec.nodeName;
                 const command = commandStates[nodeName];
-                const blocked = isCommandActive(command?.status);
-                const drained = isDrained(node);
-                const canDrain = !blocked && node.status.state === 'IDLE' && !drained &&
-                    capabilities?.['nodes.drain'] === true;
-                const canResume = !blocked && drained && capabilities?.['nodes.resume'] === true;
+                const availableActions = availableNodeActions({
+                    node,
+                    capabilities,
+                    capabilitiesLoading,
+                    connected,
+                    command,
+                });
                 const items = [];
-                if (canDrain) {
+                if (availableActions.includes('DRAIN')) {
                     items.push({
                         itemKey: 'drain',
                         title: 'Drain node',
@@ -159,7 +148,7 @@ export const NodeTable = () => {
                         },
                     });
                 }
-                if (canResume) {
+                if (availableActions.includes('RESUME')) {
                     items.push({
                         itemKey: 'resume',
                         title: 'Resume node',

@@ -17,7 +17,9 @@ The Stage D acceptance record marks Stages A-C and Stage D as passed. Stage A re
 ## Verification
 
 - `npm run test:ipc` passed, including framing, client, native channel, Node stream, and command-service checks.
+- `npm run test:node-ui` passed synthetic policy checks for missing capabilities, disconnected/unavailable Node state, non-admin capabilities, `IDLE+DRAIN` resume eligibility, inapplicable states, duplicate blocking for pending/running/unknown outcomes, and error classification.
 - After the composite-state display fix, `npm run build`, `npm run test:ipc`, `npx eslint src/node-table.tsx`, and `git diff --check` passed.
+- After adding the Node UI policy tests, the production build, IPC suite, focused ESLint, and `git diff --check` passed again.
 - ESLint passed for `src/node-provider.tsx`, `src/node-table.tsx`, and `src/generic-table.tsx`.
 - `git diff --check` passed.
 - Repository-wide ESLint still reports 262 errors in six untouched files: `src/app.tsx`, `src/index.tsx`, `src/ipc/channel.ts`, `src/ipc/framing.test.ts`, `src/ipc/framing.ts`, and `src/ipc/node-query.ts`.
@@ -27,18 +29,22 @@ The Stage D acceptance record marks Stages A-C and Stage D as passed. Stage A re
 
 Initially, the integrated browser rejected the host's HTTPS certificate. After the user installed the Cockpit CA in the local Windows trust store, a trusted browser session reached Cockpit and the user authenticated as `slurm_admin`.
 
-On 2026-10-25, the user authenticated as `slurm_admin` in the trusted Windows Edge browser. The deployed UI showed `c21` with reason `test v4`, command `drain: succeeded` (`cmd-edcc8ebc-a0c6-439d-a4bf-faf5fad52304`), and state `IDLE+DRAIN`. The user-provided `sinfo` output independently reported `c21` in `drain`. The installed bundle hash was subsequently confirmed to match the rebuilt bundle. This confirms the composite-state display fix and authoritative state agreement for the drain path. The reported node remains drained; this evidence does not include a resume result.
+On 2026-10-25, the user authenticated as `slurm_admin` in the trusted Windows Edge browser. The deployed UI showed `c21` with reason `test v4`, command `drain: succeeded` (`cmd-ca66a8f8-1a14-49fa-b121-f14fc7b4b60d`), and state `IDLE+DRAIN`. The user-provided `sinfo` output independently reported `c21` in `drain`.
+
+The same browser session then submitted resume for `c21`; the UI reported `resume: succeeded` (`cmd-7ced7294-8fde-455f-bde4-f92b0fe63e1c`) and showed `c21` state `IDLE` with empty reason. The user-provided `sinfo` output independently reported all nodes idle, including `c21`.
+
+The user then logged in as `slurm_none`; the Node table rendered without mutation actions for all rows. This is consistent with the expected non-admin capability-denied presentation.
+
+The installed bundle hash was subsequently confirmed to match the rebuilt bundle.
 
 The repository browser bootstrap was not run: it changes root/admin credentials, adds SSH keys, changes the core-dump setting, and installs a VM image. The existing browser test only checks the general application page and does not cover Stage E command workflows.
 
 ## Stage E Decision
 
-Stage E is implemented and its local frontend checks pass, but it is **not accepted**. The trusted admin browser report verifies the drain command result and composite state against `sinfo`. Acceptance remains pending:
+Stage E is implemented and its local frontend checks pass. The trusted admin and non-admin browser reports verify drain and resume against authoritative Slurm state, plus non-admin action suppression. Synthetic tests cover the pure policy used by the UI and command provider. They do not mount React components or verify rendered pending/error visuals. Stage E remains **pending final acceptance evidence** for:
 
-- admin capability refresh and correlated command response;
-- admin resume confirmation, visible progress/result, and authoritative Node update through the stream;
-- non-admin controls unavailable, and controls unavailable when capabilities or observed state are missing;
-- command rejection/error display and duplicate prevention while pending or unknown;
+- rendered pending and inline command-error states, including duplicate prevention while pending or unknown;
+- browser-visible action suppression when capability or observed-state data is unavailable; synthetic tests cover the underlying policy;
 - the authenticated browser account corresponds to the daemon-observed peer UID/GID for the command connection.
 
 Use the dedicated test Node, verify and restore its initial state, and record the browser identity, command results, and stream generations before marking Stage E accepted.
