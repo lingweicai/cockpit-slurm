@@ -18,8 +18,9 @@ The Stage D acceptance record marks Stages A-C and Stage D as passed. Stage A re
 
 - `npm run test:ipc` passed, including framing, client, native channel, Node stream, and command-service checks.
 - `npm run test:node-ui` passed synthetic policy checks for missing capabilities, disconnected/unavailable Node state, non-admin capabilities, `IDLE+DRAIN` resume eligibility, inapplicable states, duplicate blocking for pending/running/unknown outcomes, and error classification.
+- The same `test:node-ui` run bundles the actual React command-status and PatternFly actions-cell components, server-renders pending, failed, denied, and unknown status feedback, checks command IDs/errors are visible, and verifies the rendered action menu is disabled/empty for unavailable data and active command outcomes. These checks do not open IPC or invoke Slurm.
 - After the composite-state display fix, `npm run build`, `npm run test:ipc`, `npx eslint src/node-table.tsx`, and `git diff --check` passed.
-- After adding the Node UI policy tests, the production build, IPC suite, focused ESLint, and `git diff --check` passed again.
+- After adding the rendered-component tests, the production build, IPC suite, UI tests, focused ESLint, and `git diff --check` passed.
 - ESLint passed for `src/node-provider.tsx`, `src/node-table.tsx`, and `src/generic-table.tsx`.
 - `git diff --check` passed.
 - Repository-wide ESLint still reports 262 errors in six untouched files: `src/app.tsx`, `src/index.tsx`, `src/ipc/channel.ts`, `src/ipc/framing.test.ts`, `src/ipc/framing.ts`, and `src/ipc/node-query.ts`.
@@ -41,10 +42,6 @@ The repository browser bootstrap was not run: it changes root/admin credentials,
 
 ## Stage E Decision
 
-Stage E is implemented and its local frontend checks pass. The trusted admin and non-admin browser reports verify drain and resume against authoritative Slurm state, plus non-admin action suppression. Synthetic tests cover the pure policy used by the UI and command provider. They do not mount React components or verify rendered pending/error visuals. Stage E remains **pending final acceptance evidence** for:
+Stage E frontend integration is **accepted** as of 2026-10-26. The operator-reported Windows Edge tests verify admin drain/resume responses against authoritative `sinfo` state and verify that `slurm_none` sees no mutation actions. The local policy and rendered-component tests verify pending/error/unknown feedback, correlation-ID presentation, duplicate blocking, and disabled/empty actions when capabilities or observed state are unavailable. The Stage A acceptance record remains the evidence for the authenticated Cockpit-user-to-peer-credential mapping prerequisite.
 
-- rendered pending and inline command-error states, including duplicate prevention while pending or unknown;
-- browser-visible action suppression when capability or observed-state data is unavailable; synthetic tests cover the underlying policy;
-- the authenticated browser account corresponds to the daemon-observed peer UID/GID for the command connection.
-
-Use the dedicated test Node, verify and restore its initial state, and record the browser identity, command results, and stream generations before marking Stage E accepted.
+Pending/error rendering was verified with React server rendering of the actual presentation component, not with a live delayed or disconnected Cockpit command. No Slurm command was issued by the synthetic UI tests. The repository browser bootstrap remains intentionally unrun because it changes host credentials and settings.

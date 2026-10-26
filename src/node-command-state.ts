@@ -11,7 +11,7 @@ export interface NodeCommandDisplayState {
 }
 
 export interface NodeCommandAvailability {
-    node?: NodeStreamNode;
+    node?: NodeStreamNode | undefined;
     action: NodeAction;
     capabilities: NodeCapabilities | null;
     capabilitiesLoading: boolean;

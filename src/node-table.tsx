@@ -6,16 +6,13 @@ import { Modal } from '@patternfly/react-core/dist/esm/components/Modal/Modal.js
 import { ModalBody } from '@patternfly/react-core/dist/esm/components/Modal/ModalBody.js';
 import { ModalFooter } from '@patternfly/react-core/dist/esm/components/Modal/ModalFooter.js';
 import { ModalHeader } from '@patternfly/react-core/dist/esm/components/Modal/ModalHeader.js';
-import { Spinner } from '@patternfly/react-core/dist/esm/components/Spinner/index.js';
 import { TextArea } from '@patternfly/react-core/dist/esm/components/TextArea/index.js';
-import { ActionsColumn } from '@patternfly/react-table';
 
 import { GenericTable, type GenericTableColumn } from './generic-table';
-import {
-    availableNodeActions,
-    commandStatusText,
-} from './node-command-state';
+import { NodeActionsCell, NodeCommandStatus } from './node-command-ui';
 import { type NodeResource, useNodes } from './node-provider';
+
+type NodeAction = 'DRAIN' | 'RESUME';
 
 interface ConfirmationDialog {
     nodeName: string;
@@ -110,15 +107,7 @@ export const NodeTable = () => {
                 if (!command) {
                     return '—';
                 }
-                const active = command.status === 'pending' || command.status === 'running';
-                return (
-                    <div>
-                        { active ? <Spinner isInline size='sm' aria-label={ commandStatusText(command) } /> : null }
-                        <span>{ commandStatusText(command) }</span>
-                        { command.error ? <Alert isInline variant='danger' title={ command.error } /> : null }
-                        { command.commandId ? <small>Command ID: { command.commandId }</small> : null }
-                    </div>
-                );
+                return <NodeCommandStatus command={ command } />;
             },
         },
         {
@@ -129,39 +118,22 @@ export const NodeTable = () => {
             render: node => {
                 const nodeName = node.spec.nodeName;
                 const command = commandStates[nodeName];
-                const availableActions = availableNodeActions({
-                    node,
-                    capabilities,
-                    capabilitiesLoading,
-                    connected,
-                    command,
-                });
-                const items = [];
-                if (availableActions.includes('DRAIN')) {
-                    items.push({
-                        itemKey: 'drain',
-                        title: 'Drain node',
-                        onClick: () => {
-                            setDrainReason('');
-                            setSubmissionError(null);
-                            setDialog({ nodeName, action: 'DRAIN' });
-                        },
-                    });
-                }
-                if (availableActions.includes('RESUME')) {
-                    items.push({
-                        itemKey: 'resume',
-                        title: 'Resume node',
-                        onClick: () => {
-                            setSubmissionError(null);
-                            setDialog({ nodeName, action: 'RESUME' });
-                        },
-                    });
-                }
                 return (
-                    <ActionsColumn
-                        items={ items }
-                        isDisabled={ !connected || capabilitiesLoading || items.length === 0 }
+                    <NodeActionsCell
+                    node={ node }
+                    capabilities={ capabilities }
+                    capabilitiesLoading={ capabilitiesLoading }
+                    connected={ connected }
+                    command={ command }
+                    onDrain={ () => {
+                        setDrainReason('');
+                        setSubmissionError(null);
+                        setDialog({ nodeName, action: 'DRAIN' });
+                    } }
+                    onResume={ () => {
+                        setSubmissionError(null);
+                        setDialog({ nodeName, action: 'RESUME' });
+                    } }
                     />
                 );
             },
