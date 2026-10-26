@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -90,9 +91,17 @@ func (d *Decoder) Decode() (Envelope, error) {
 	if _, err := io.ReadFull(d.r, payload); err != nil {
 		return envelope, fmt.Errorf("read message payload: %w", err)
 	}
+	if err := validateUniqueJSONKeys(payload); err != nil {
+		return envelope, err
+	}
 
-	if err := json.Unmarshal(payload, &envelope); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
 		return envelope, fmt.Errorf("decode JSON: %w", err)
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return envelope, fmt.Errorf("decode JSON: %w: trailing data", ErrInvalidMessage)
 	}
 
 	if err := ValidateEnvelope(envelope); err != nil {

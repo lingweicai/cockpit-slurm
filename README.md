@@ -41,33 +41,61 @@ make
 
 `make install` compiles and installs the package of dist built with directory of src for frontend files in `/usr/local/share/cockpit`. 
 
-install backend executable of cockpit-slurm-bridge and cockpit-slurm-channel for in path below: 
-`/usr/local/sbin/cockpit-slurm-bridge`
-`/usr/local/libexec/cockpit-slurm-channel`
+install the backend executable at:
+`/usr/local/bin/cockpit-slurm`
 
 and socket file to the path:
-`/run/cockpit-slurm/bridge.sock`
+`/run/cockpit-slurm/cockpit-slurm.sock`
 
 ## Install with RPM package
 For Redhat/RockyLinux RPM package of `production` mode, install front end dist directory to: 
 `/usr/share/cockpit` 
 and backend files to:
-`/usr/sbin/cockpit-slurm-bridge`
-`/usr/libexec/cockpit-slurm-channel`
-`/run/cockpit-slurm/bridge.sock`
+`/usr/bin/cockpit-slurm`
+`/run/cockpit-slurm/cockpit-slurm.sock`
 
-To start cockpit-slurm-bridge service in backend, run command 
-`sudo systemctl start cockpit-slurm-bridge`
+To start the cockpit-slurm service in the backend, run:
+`sudo systemctl start cockpit-slurm`
+
+The frontend connects directly to the daemon Unix socket through Cockpit's
+native `payload: "stream"` channel. The socket is owned by
+`cockpit-slurm:cockpit-slurm` with mode `0660`, and `/run/cockpit-slurm` is
+owned by the same account and group with mode `0750`. Add each authorized
+Cockpit login user to the `cockpit-slurm` group; users outside that group
+cannot traverse the runtime directory or connect to the socket. Restart the
+user's Cockpit session after changing group membership.
+
+Capability requests query SlurmDB through `/usr/bin/sacctmgr` in read-only JSON
+mode as the `cockpit-slurm` service account. Ensure `sacctmgr` is installed and
+that this account can read user, association, and coordinator records. Lookup
+failures return `capability-unavailable`; they never grant capabilities by
+default.
+
+The Phase 5 command ledger uses pure-Go SQLite at
+`/var/lib/cockpit-slurm/commands.db`. The service unit creates this persistent
+state directory with mode `0750`; the database and SQLite WAL/shared-memory
+files use restrictive permissions. The ledger uses WAL journaling and full
+synchronous durability, and an unavailable or inconsistent ledger prevents
+command admission rather than falling back to memory.
+
+The optional Node mutation boundary is packaged as a separately activated
+D-Bus helper. Its executable and unit are root-owned, but the helper process
+and its fixed `scontrol` child run as Slurm's configured `SlurmUser` (currently
+`slurm`). The bus policy permits method calls only from the `cockpit-slurm`
+service user, and the helper independently verifies that caller UID and
+accepts only fixed Node drain/resume operations. Packaging the helper does
+not enable a mutation endpoint; backend command orchestration and the Stage C
+execution-identity acceptance gate must pass before it is invoked.
 
 ## Install for development user
 
 For development, you usually want to run your module straight out of the git
 tree. To do that, run `make devel-install`, which links your checkout to the
-location were cockpit-bridge looks for packages, installs bridge/channel under
+location where Cockpit looks for packages, installs the backend under
 `~/.local/libexec/cockpit-slurm`, and creates `~/.local/bin` symlinks. It also
-configures `COCKPIT_SLURM_BRIDGE_SOCKET_PATH` to:
+configures `COCKPIT_SLURM_SOCKET_PATH` to:
 
-`/run/user/<uid>/cockpit-slurm/bridge.sock`
+`/run/user/<uid>/cockpit-slurm/cockpit-slurm.sock`
 
 If you prefer to do this manually:
 
@@ -93,16 +121,16 @@ When developing against a virtual machine, watch mode can also automatically upl
 the code changes by setting the `RSYNC` environment variable to
 the remote hostname.
 
-If you are testing locally with a custom bridge socket path, the frontend now supports
-a runtime override via a browser global. Set it to the same path used by the bridge process:
+If you are testing locally with a custom socket path, the frontend now supports
+a runtime override via a browser global. Set it to the same path used by the backend process:
 
 ```js
-window.COCKPIT_SLURM_BRIDGE_SOCKET_PATH = "/run/user/1000/cockpit-slurm/bridge.sock";
+window.COCKPIT_SLURM_SOCKET_PATH = "/run/user/1000/cockpit-slurm/cockpit-slurm.sock";
 ```
 
 This browser global is only required for local development testing where the frontend is
-running against a non-standard bridge socket path. If that override is not set, the client
-falls back to the default socket path at `/run/cockpit-slurm/bridge.sock`.
+running against a non-standard socket path. If that override is not set, the client
+falls back to the default socket path at `/run/cockpit-slurm/cockpit-slurm.sock`.
 
     RSYNC=c make watch
 
@@ -152,6 +180,21 @@ Violations of some rules can be fixed automatically by:
 Rules configuration can be found in the `.stylelintrc.json` file.
 
 # Running tests locally
+
+The Node stream backend path, including synchronization, cache changes,
+multi-client fan-out, reconnect snapshots, and Unix socket cleanup, is covered
+by:
+
+    go test ./internal/ipc -run TestNodeStreamEndToEndTracksSynchronizationAndClientLifecycle
+    npm run test:ipc
+
+For a live Slurm/Cockpit acceptance check, open the Nodes page and confirm the
+stream reports connected with the current generation. Change a node's state
+through the site's normal Slurm administration procedure and confirm the table
+updates without a page reload. Reload the page and verify that a fresh snapshot
+converges to the current Slurm state. The backend integration test uses a
+controlled Node adapter so it can also check change fan-out and client
+disconnection deterministically without modifying a real cluster.
 
 Run `make check` to build an RPM, install it into a standard Cockpit test VM
 (centos-9-stream by default), and run the test/check-application integration test on

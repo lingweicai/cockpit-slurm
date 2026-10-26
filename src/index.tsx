@@ -7,23 +7,13 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 
-import { Application } from './app';
+import "cockpit-dark-theme";
 
-import 'patternfly/patternfly-6-cockpit.scss';
+import { Application } from './app.jsx';
+
+import "patternfly/patternfly-6-cockpit.scss";
 import './app.scss';
 
-const mountApplication = () => {
-    const appRoot = document.getElementById('app');
-    if (!appRoot) {
-        console.error('cockpit-slurm mount failure: #app element not found');
-        return;
-    }
-
-    createRoot(appRoot).render(<Application />);
-};
-
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', mountApplication);
-} else {
-    mountApplication();
-}
+document.addEventListener("DOMContentLoaded", () => {
+    createRoot(document.getElementById("app")!).render(<Application />);
+});

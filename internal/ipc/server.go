@@ -1,27 +1,112 @@
 package ipc
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/lingweicai/cockpit-slurm/internal/connection"
+	"github.com/lingweicai/cockpit-slurm/internal/dispatcher"
+	"github.com/lingweicai/cockpit-slurm/internal/protocol"
+	"github.com/lingweicai/cockpit-slurm/internal/stream"
 )
 
-const DefaultSocketPath = "/run/cockpit-slurm/bridge.sock"
+const DefaultSocketPath = "/run/cockpit-slurm/cockpit-slurm.sock"
+const maxCachedRequestsPerConnection = 4096
+
+func socketPathFromEnv() string {
+	if path := os.Getenv("COCKPIT_SLURM_SOCKET_PATH"); path != "" {
+		return path
+	}
+	return DefaultSocketPath
+}
 
 const socketFileMode = 0660
+const defaultOutboundQueueSize = 32
 
 var ErrSocketInUse = errors.New("unix socket is already in use")
 
+type outboundMessage struct {
+	envelope protocol.Envelope
+	written  chan error
+}
+
+type cachedRequest struct {
+	fingerprint [sha256.Size]byte
+	response    protocol.Envelope
+}
+
+type requestReplayCache struct {
+	entries map[string]cachedRequest
+}
+
+func (c *requestReplayCache) Dispatch(message protocol.Envelope, dispatch func() protocol.Envelope) (protocol.Envelope, bool) {
+	fingerprint, err := requestFingerprint(message)
+	if err != nil {
+		return protocol.NewErrorEnvelope(message.MessageID, protocol.ErrorPayload{
+			Code: protocol.ErrorCodeInvalidPayload, Category: protocol.ErrorCategoryValidation,
+			Message: "Invalid protocol message", Retryable: false,
+		}), false
+	}
+	if c.entries == nil {
+		c.entries = make(map[string]cachedRequest)
+	}
+	if previous, exists := c.entries[message.MessageID]; exists {
+		if previous.fingerprint == fingerprint {
+			return previous.response, false
+		}
+		return protocol.NewErrorEnvelope(message.MessageID, protocol.ErrorPayload{
+			Code: protocol.ErrorCodeMessageIDConflict, Category: protocol.ErrorCategoryConflict,
+			Message: "Message ID was already used for a different request", Retryable: false,
+		}), false
+	}
+	if len(c.entries) >= maxCachedRequestsPerConnection {
+		return protocol.NewErrorEnvelope(message.MessageID, protocol.ErrorPayload{
+			Code: protocol.ErrorCodeInternal, Category: protocol.ErrorCategoryInternal,
+			Message: "Connection request limit reached", Retryable: false,
+		}), true
+	}
+	response := dispatch()
+	c.entries[message.MessageID] = cachedRequest{fingerprint: fingerprint, response: response}
+	return response, false
+}
+
+func requestFingerprint(message protocol.Envelope) ([sha256.Size]byte, error) {
+	var payload any
+	decoder := json.NewDecoder(bytes.NewReader(message.Payload))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	canonical, err := json.Marshal(struct {
+		Protocol string               `json:"protocol"`
+		Version  string               `json:"version"`
+		Type     protocol.MessageType `json:"type"`
+		Payload  any                  `json:"payload"`
+	}{Protocol: message.Protocol, Version: message.Version, Type: message.Type, Payload: payload})
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return sha256.Sum256(canonical), nil
+}
+
 // Server provides a Unix-domain socket listener for cockpit-slurm.
 type Server struct {
-	socketPath string
-	listener   net.Listener
+	socketPath  string
+	listener    net.Listener
+	dispatcher  *dispatcher.MessageDispatcher
+	connections connection.ConnectionManager
+	nodeStreams *stream.NodeStreamRegistry
 
 	wg sync.WaitGroup
 
@@ -30,13 +115,37 @@ type Server struct {
 	active map[net.Conn]struct{}
 }
 
+// NewServerWithNodeStreams creates a Unix socket server that streams Node
+// snapshots and changes to each accepted connection.
+func NewServerWithNodeStreams(socketPath string, registry *stream.NodeStreamRegistry) *Server {
+	return NewServerWithNodeStreamsAndDispatcher(socketPath, registry, nil)
+}
+
+func NewServerWithNodeStreamsAndDispatcher(socketPath string, registry *stream.NodeStreamRegistry, messageDispatcher *dispatcher.MessageDispatcher) *Server {
+	server := NewServerWithDispatcher(socketPath, messageDispatcher)
+	server.nodeStreams = registry
+	return server
+}
+
 // NewServer creates an IPC server.
 func NewServer(socketPath string) *Server {
+	return NewServerWithDispatcher(socketPath, dispatcher.NewDispatcher())
+}
+
+// NewServerWithDispatcher creates an IPC server using the supplied message dispatcher.
+func NewServerWithDispatcher(socketPath string, messageDispatcher *dispatcher.MessageDispatcher) *Server {
 	if socketPath == "" {
-		socketPath = DefaultSocketPath
+		socketPath = socketPathFromEnv()
+	}
+	if messageDispatcher == nil {
+		messageDispatcher = dispatcher.NewDispatcher()
 	}
 
-	return &Server{socketPath: socketPath}
+	return &Server{
+		socketPath:  socketPath,
+		dispatcher:  messageDispatcher,
+		connections: connection.NewConnectionManager(),
+	}
 }
 
 // SocketPath returns the Unix socket path.
@@ -122,20 +231,145 @@ func (s *Server) Serve(ctx context.Context) error {
 			defer s.wg.Done()
 			defer s.untrackConn(conn)
 			defer conn.Close()
-
-			// Phase 1B intentionally does not process application messages.
-			// Phase 1C will attach the protocol layer here.
-			// The handler exits when the socket is closed or the caller cancels context.
-			buf := make([]byte, 1)
-			for {
-				if ctx.Err() != nil {
-					return
-				}
-				if _, err := conn.Read(buf); err != nil {
-					return
-				}
-			}
+			s.serveConnection(conn)
 		}(conn)
+	}
+}
+
+func (s *Server) serveConnection(conn net.Conn) {
+	connState, err := connection.NewConnection(conn)
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+	if err := s.connections.Register(connState); err != nil {
+		_ = connState.Close()
+		return
+	}
+	defer s.connections.Unregister(connState.ID)
+
+	queueSize := defaultOutboundQueueSize
+	if s.nodeStreams != nil {
+		queueSize = s.nodeStreams.QueueSize()
+	}
+	outbound := make(chan outboundMessage, queueSize)
+	writerDone := make(chan struct{})
+	go s.writeConnection(connState, conn, outbound, writerDone)
+	defer func() {
+		_ = connState.Close()
+		<-writerDone
+	}()
+
+	enqueue := func(envelope protocol.Envelope) bool {
+		select {
+		case <-connState.Context.Done():
+			return false
+		case outbound <- outboundMessage{envelope: envelope}:
+			return true
+		default:
+			return false
+		}
+	}
+	if s.nodeStreams != nil {
+		nodeStream := s.nodeStreams.Register(enqueue, func() { _ = connState.Close() })
+		if nodeStream == nil {
+			_ = connState.Close()
+			return
+		}
+		defer nodeStream.Unregister()
+	}
+
+	decoder := protocol.NewDecoder(conn)
+	replayCache := &requestReplayCache{}
+	for {
+		if connState.Context.Err() != nil {
+			return
+		}
+		message, err := decoder.Decode()
+		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return
+			}
+			response := decodeErrorEnvelope(message.MessageID, err)
+			if !s.writeConnectionResponse(connState, outbound, response) {
+				return
+			}
+			return
+		}
+
+		response, closeAfterResponse := replayCache.Dispatch(message, func() protocol.Envelope {
+			return s.dispatcher.DispatchWithUser(connState.Context, connState.User, message)
+		})
+		if !enqueue(response) {
+			_ = connState.Close()
+			return
+		}
+		if closeAfterResponse {
+			_ = connState.Close()
+			return
+		}
+	}
+}
+
+func decodeErrorEnvelope(messageID string, err error) protocol.Envelope {
+	if messageID == "" {
+		messageID = "ERR"
+	}
+	if errors.Is(err, protocol.ErrUnknownMessage) {
+		return protocol.NewErrorEnvelope(messageID, protocol.ErrorPayload{
+			Code:      protocol.ErrorCodeUnsupportedMessageType,
+			Category:  protocol.ErrorCategoryProtocol,
+			Message:   "Message type is not supported",
+			Retryable: false,
+		})
+	}
+	return protocol.NewErrorEnvelope(messageID, protocol.ErrorPayload{
+		Code:      protocol.ErrorCodeInvalidPayload,
+		Category:  protocol.ErrorCategoryValidation,
+		Message:   "Invalid protocol message",
+		Retryable: false,
+	})
+}
+
+func (s *Server) writeConnection(connState *connection.Connection, conn net.Conn, outbound <-chan outboundMessage, done chan<- struct{}) {
+	defer close(done)
+	encoder := protocol.NewEncoder(conn)
+	for {
+		select {
+		case <-connState.Context.Done():
+			return
+		default:
+		}
+		select {
+		case <-connState.Context.Done():
+			return
+		case message := <-outbound:
+			err := encoder.Encode(message.envelope)
+			if message.written != nil {
+				message.written <- err
+			}
+			if err != nil {
+				_ = connState.Close()
+				return
+			}
+		}
+	}
+}
+
+func (s *Server) writeConnectionResponse(connState *connection.Connection, outbound chan<- outboundMessage, response protocol.Envelope) bool {
+	written := make(chan error, 1)
+	select {
+	case <-connState.Context.Done():
+		return false
+	case outbound <- outboundMessage{envelope: response, written: written}:
+	default:
+		return false
+	}
+	select {
+	case err := <-written:
+		return err == nil
+	case <-connState.Context.Done():
+		return false
 	}
 }
 
@@ -167,6 +401,11 @@ func (s *Server) Close() error {
 	for _, conn := range active {
 		_ = conn.Close()
 	}
+	if s.nodeStreams != nil {
+		s.nodeStreams.CloseAll()
+	}
+
+	s.connections.CloseAll()
 
 	s.wg.Wait()
 

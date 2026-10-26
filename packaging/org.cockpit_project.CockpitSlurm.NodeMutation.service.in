@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.cockpit_project.CockpitSlurm.NodeMutation
+SystemdService=cockpit-slurm-node-helper.service
+Exec=@LIBEXECDIR@/cockpit-slurm-node-helper
+User=slurm

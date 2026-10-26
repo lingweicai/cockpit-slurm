@@ -12,7 +12,6 @@ SPEC=$(RPM_NAME).spec
 PREFIX ?= /usr/local
 DEVEL_PREFIX ?= $(HOME)/.local
 DEVEL_COCKPIT_DIR = $(DEVEL_PREFIX)/share/cockpit
-DEVEL_LIBEXECDIR = $(DEVEL_PREFIX)/libexec/cockpit-slurm
 DEVEL_BINDIR = $(DEVEL_PREFIX)/bin
 DEVEL_ENV_DIR = $(HOME)/.config/environment.d
 DEVEL_ENV_FILE = $(DEVEL_ENV_DIR)/cockpit-slurm-devel.conf
@@ -22,14 +21,16 @@ VM_IMAGE=$(CURDIR)/test/images/$(TEST_OS)
 NODE_MODULES_TEST=package-lock.json
 # build.js ran in non-watch mode
 DIST_TEST=runtime-npm-modules.txt
-BRIDGE_BINARY=cmd/cockpit-slurm-bridge/cockpit-slurm-bridge/cockpit-slurm-bridge
-CHANNEL_BINARY=cmd/cockpit-slurm-channel/cockpit-slurm-channel/cockpit-slurm-channel
+APP_BINARY=cmd/cockpit-slurm/cockpit-slurm
+HELPER_BINARY=cmd/cockpit-slurm-node-helper/cockpit-slurm-node-helper
+LIBEXECDIR ?= $(PREFIX)/libexec
+SYSTEMD_UNIT_DIR ?= /etc/systemd/system
 # one example file in pkg/lib to check if it was already checked out
 COCKPIT_REPO_STAMP=pkg/lib/cockpit-po-plugin.js
 # common arguments for tar, mostly to make the generated tarballs reproducible
 TAR_ARGS = --sort=name --mtime "@$(shell git show --no-patch --format='%at')" --mode=go=rX,u+rw,a-s --numeric-owner --owner=0 --group=0
 
-all: $(DIST_TEST) $(BRIDGE_BINARY) $(CHANNEL_BINARY)
+all: $(DIST_TEST) $(APP_BINARY) $(HELPER_BINARY)
 
 # checkout common files from Cockpit repository required to build this project;
 # this has no API stability guarantee, so check out a stable tag when you start
@@ -96,11 +97,11 @@ packaging/arch/PKGBUILD: packaging/arch/PKGBUILD.in
 $(DIST_TEST): $(NODE_MODULES_TEST) $(COCKPIT_REPO_STAMP) $(shell find src/ -type f) package.json build.js
 	NODE_ENV=$(NODE_ENV) ./build.js
 
-$(BRIDGE_BINARY): cmd/go.mod $(shell find cmd/cockpit-slurm-bridge -name '*.go' -o -name 'go.mod' -o -name 'go.sum')
-	cd cmd && go build -o $(abspath $(BRIDGE_BINARY)) ./cockpit-slurm-bridge/cockpit-slurm-bridge
+$(APP_BINARY): $(shell find cmd/cockpit-slurm -name '*.go' -o -name 'go.mod' -o -name 'go.sum')
+	go build -o $(abspath $(APP_BINARY)) ./cmd/cockpit-slurm
 
-$(CHANNEL_BINARY): cmd/go.mod $(shell find cmd/cockpit-slurm-channel -name '*.go' -o -name 'go.mod' -o -name 'go.sum')
-	cd cmd && go build -o $(abspath $(CHANNEL_BINARY)) ./cockpit-slurm-channel/cockpit-slurm-channel
+$(HELPER_BINARY): $(shell find cmd/cockpit-slurm-node-helper -name '*.go' -o -name 'go.mod' -o -name 'go.sum')
+	go build -o $(abspath $(HELPER_BINARY)) ./cmd/cockpit-slurm-node-helper
 
 watch: $(NODE_MODULES_TEST) $(COCKPIT_REPO_STAMP)
 	NODE_ENV=$(NODE_ENV) ./build.js --watch
@@ -110,52 +111,53 @@ clean:
 	rm -f $(SPEC) packaging/arch/PKGBUILD
 	rm -f po/LINGUAS
 	rm -f metafile.json runtime-npm-modules.txt
-	rm -f $(BRIDGE_BINARY) $(CHANNEL_BINARY)
+	rm -f $(APP_BINARY) $(HELPER_BINARY)
 
-install: $(DIST_TEST) po/LINGUAS $(CHANNEL_BINARY) $(BRIDGE_BINARY)
+install: $(DIST_TEST) po/LINGUAS $(APP_BINARY) $(HELPER_BINARY)
 	mkdir -p $(DESTDIR)$(PREFIX)/share/cockpit/$(PACKAGE_NAME)
 	cp -r dist/* $(DESTDIR)$(PREFIX)/share/cockpit/$(PACKAGE_NAME)
 	mkdir -p $(DESTDIR)$(PREFIX)/share/metainfo/
 	msgfmt --xml -d po \
 		--template $(APPSTREAMFILE) \
 		-o $(DESTDIR)$(PREFIX)/share/metainfo/$(APPSTREAMFILE)
-	mkdir -p $(DESTDIR)$(PREFIX)/libexec/cockpit-slurm
-	install -m 755 $(CHANNEL_BINARY) $(DESTDIR)$(PREFIX)/libexec/cockpit-slurm/
-	mkdir -p $(DESTDIR)$(PREFIX)/sbin
-	install -m 755 $(BRIDGE_BINARY) $(DESTDIR)$(PREFIX)/sbin/
-	mkdir -p $(DESTDIR)/etc/systemd/system
-	install -m 644 packaging/cockpit-slurm-bridge.service $(DESTDIR)/etc/systemd/system/cockpit-slurm-bridge.service
+	mkdir -p $(DESTDIR)$(PREFIX)/bin
+	install -m 755 $(APP_BINARY) $(DESTDIR)$(PREFIX)/bin/
+	mkdir -p $(DESTDIR)$(LIBEXECDIR)
+	install -m 755 $(HELPER_BINARY) $(DESTDIR)$(LIBEXECDIR)/cockpit-slurm-node-helper
+	mkdir -p $(DESTDIR)$(PREFIX)/share/dbus-1/system-services
+	sed 's|@LIBEXECDIR@|$(LIBEXECDIR)|g' packaging/org.cockpit_project.CockpitSlurm.NodeMutation.service.in > $(DESTDIR)$(PREFIX)/share/dbus-1/system-services/org.cockpit_project.CockpitSlurm.NodeMutation.service
+	mkdir -p $(DESTDIR)/etc/dbus-1/system.d
+	install -m 644 packaging/org.cockpit_project.CockpitSlurm.NodeMutation.conf $(DESTDIR)/etc/dbus-1/system.d/
+	mkdir -p $(DESTDIR)$(SYSTEMD_UNIT_DIR)
+	sed 's|/usr/local/bin/cockpit-slurm|$(PREFIX)/bin/cockpit-slurm|' packaging/cockpit-slurm.service > $(DESTDIR)$(SYSTEMD_UNIT_DIR)/cockpit-slurm.service
+	sed 's|@LIBEXECDIR@|$(LIBEXECDIR)|g' packaging/cockpit-slurm-node-helper.service.in > $(DESTDIR)$(SYSTEMD_UNIT_DIR)/cockpit-slurm-node-helper.service
 
 uninstall:
 	rm -rf $(DESTDIR)$(PREFIX)/share/cockpit/$(PACKAGE_NAME)
 	rm -f $(DESTDIR)$(PREFIX)/share/metainfo/$(APPSTREAMFILE)
-	rm -f $(DESTDIR)$(PREFIX)/libexec/cockpit-slurm/cockpit-slurm-channel
-	rm -rf $(DESTDIR)$(PREFIX)/libexec/cockpit-slurm
-	rm -f $(DESTDIR)$(PREFIX)/sbin/cockpit-slurm-bridge
-	rm -f $(DESTDIR)/etc/systemd/system/cockpit-slurm-bridge.service
+	rm -f $(DESTDIR)$(PREFIX)/bin/cockpit-slurm
+	rm -f $(DESTDIR)$(LIBEXECDIR)/cockpit-slurm-node-helper
+	rm -f $(DESTDIR)$(PREFIX)/share/dbus-1/system-services/org.cockpit_project.CockpitSlurm.NodeMutation.service
+	rm -f $(DESTDIR)/etc/dbus-1/system.d/org.cockpit_project.CockpitSlurm.NodeMutation.conf
+	rm -f $(DESTDIR)$(SYSTEMD_UNIT_DIR)/cockpit-slurm.service
+	rm -f $(DESTDIR)$(SYSTEMD_UNIT_DIR)/cockpit-slurm-node-helper.service
 
 # this requires a built source tree and avoids having to install anything system-wide
-# also install the bridge/channel binaries for local development execution.
-devel-install: $(DIST_TEST) $(BRIDGE_BINARY) $(CHANNEL_BINARY)
+devel-install: $(DIST_TEST) $(APP_BINARY)
 	mkdir -p $(DEVEL_COCKPIT_DIR)
 	ln -snf $(CURDIR)/dist $(DEVEL_COCKPIT_DIR)/$(PACKAGE_NAME)
-	mkdir -p $(DEVEL_LIBEXECDIR)
-	install -m 755 $(BRIDGE_BINARY) $(DEVEL_LIBEXECDIR)/
-	install -m 755 $(CHANNEL_BINARY) $(DEVEL_LIBEXECDIR)/
 	mkdir -p $(DEVEL_BINDIR)
-	ln -snf $(DEVEL_LIBEXECDIR)/cockpit-slurm-bridge $(DEVEL_BINDIR)/cockpit-slurm-bridge
-	ln -snf $(DEVEL_LIBEXECDIR)/cockpit-slurm-channel $(DEVEL_BINDIR)/cockpit-slurm-channel
+	install -m 755 $(APP_BINARY) $(DEVEL_BINDIR)/cockpit-slurm
 	mkdir -p $(DEVEL_ENV_DIR)
-	printf 'COCKPIT_SLURM_BRIDGE_SOCKET_PATH=/run/user/%s/cockpit-slurm/bridge.sock\n' "$$(id -u)" > $(DEVEL_ENV_FILE)
+	printf 'COCKPIT_SLURM_SOCKET_PATH=/run/user/%s/cockpit-slurm/cockpit-slurm.sock\n' "$$(id -u)" > $(DEVEL_ENV_FILE)
 
 # assumes that there was symlink set up using the above devel-install target,
 # and removes it
 devel-uninstall:
 	rm -f $(DEVEL_COCKPIT_DIR)/$(PACKAGE_NAME)
-	rm -f $(DEVEL_BINDIR)/cockpit-slurm-bridge $(DEVEL_BINDIR)/cockpit-slurm-channel
-	rm -rf $(DEVEL_LIBEXECDIR)
+	rm -f $(DEVEL_BINDIR)/cockpit-slurm
 	rm -f $(DEVEL_ENV_FILE)
-	rmdir --ignore-fail-on-non-empty $(DEVEL_COCKPIT_DIR)
+	rmdir --ignore-fail-on-non-empty $(DEVEL_COCKPIT_DIR) 2>/dev/null || true
 
 print-version:
 	@echo "$(VERSION)"
@@ -246,24 +248,17 @@ $(NODE_MODULES_TEST): package.json
 
 # New targets for single-module layout using cmd/ (created by reorganization)
 CMD_BINDIR := bin
-CMD_BRIDGE := cmd/cockpit-slurm-bridge
-CMD_CHANNEL := cmd/cockpit-slurm-channel
+CMD_APP := cmd/cockpit-slurm
 
-.PHONY: build-cmd build-cmd-bridge build-cmd-channel run-cmd-bridge run-cmd-channel
+.PHONY: build-cmd build-cmd-app run-cmd-app
 
-# build both command binaries under cmd/
-build-cmd: build-cmd-bridge build-cmd-channel
+# build command binary under cmd/
+build-cmd: build-cmd-app
 
-build-cmd-bridge:
+build-cmd-app:
 	@mkdir -p $(CMD_BINDIR)
-	$(GO) build -o $(CMD_BINDIR)/cockpit-slurm-bridge ./$(CMD_BRIDGE)
+	$(GO) build -o $(CMD_BINDIR)/cockpit-slurm ./$(CMD_APP)
 
-build-cmd-channel:
-	@mkdir -p $(CMD_BINDIR)
-	$(GO) build -o $(CMD_BINDIR)/cockpit-slurm-channel ./$(CMD_CHANNEL)
 
-run-cmd-bridge: build-cmd-bridge
-	./$(CMD_BINDIR)/cockpit-slurm-bridge
-
-run-cmd-channel: build-cmd-channel
-	./$(CMD_BINDIR)/cockpit-slurm-channel
+run-cmd-app: build-cmd-app
+	./$(CMD_BINDIR)/cockpit-slurm
