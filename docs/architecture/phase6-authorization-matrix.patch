@@ -1,0 +1,502 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] Define central operation authorization matrix
+
+This patch adds the authorization policy contract to the v3.6 architecture,
+specifies Phase 6 implementation requirements, and adds the initial YAML
+policy source.
+
+diff --git a/docs/architecture/0.1 development-cockpit-slurm-_v3.6.md b/docs/architecture/0.1 development-cockpit-slurm-_v3.6.md
+--- a/docs/architecture/0.1 development-cockpit-slurm-_v3.6.md
++++ b/docs/architecture/0.1 development-cockpit-slurm-_v3.6.md
+@@ -903,3 +903,78 @@
+ Users should see application roles and capabilities rather than raw internal Slurm authorization values.
+ 
++### 8.5 Operation registry and authorization policy
++
++`cockpit-slurm` must use one central operation policy to define which
++application operations each application role may invoke. The policy is the
++input to the backend operation registry; authorization rules must not be
++duplicated independently in command handlers, query handlers, and React
++components.
++
++The repository policy source is:
++
++```text
++config/authorization/operations.yaml
++```
++
++The installed runtime configuration is:
++
++```text
++/etc/cockpit-slurm/operations.yaml
++```
++
++The matrix defines four application roles:
++
++```text
++Administrator
++Operator
++Coordinator
++User
++```
++
++These are application roles, not substitutes for Linux identity or Slurm
++authorization identity. In particular, the `Administrator` application role
++must not by itself be treated as Linux `root` or the configured SlurmUser.
++The backend must derive the requesting identity from the authenticated IPC
++connection and resolve Slurm `AdminLevel` and coordinator-account membership
++from trusted server-side data.
++
++Permission cells use explicit policy values rather than ambiguous Boolean
++flags:
++
++| Value | Meaning |
++| --- | --- |
++| `allow` | Application policy permits invoking the operation. |
++| `deny` | The operation is denied. |
++| `direct_owner` | The requesting user owns the target job or step. |
++| `effective_owner` | The requesting user is the direct owner or a coordinator of the target job's account. |
++| `account_coordinator` | The target account is in the requesting user's coordinator-account set. |
++| `slurm_admin` | The requesting identity is root, SlurmUser, or Slurm AdminLevel=Administrator. |
++| `slurm_privileged` | The requesting identity is a Slurm administrator or AdminLevel=Operator. |
++| `direct_owner_or_slurm_admin_identity` | The requester is the direct owner, root, or SlurmUser. |
++| `direct_owner_or_account_coordinator` | The requester is the direct owner or a coordinator of the target account. |
++
++The backend evaluates the selected cell against the server-derived
++`UserContext` and the canonical target resource. Unknown policy values,
++missing role cells, unknown operations, and unresolved resource scope must
++fail closed. A role label or frontend-supplied account/resource identifier
++must never establish ownership or coordinator scope.
++
++The operation registry is authoritative for application-level permission to
++invoke a handler. It does not replace Slurm's own authorization and validation
++of associations, accounts, partitions, QOS, limits, or resource state. A
++successful application authorization decision is necessary but is not, by
++itself, proof that Slurm will accept the operation.
++
++Read authorization has an additional requirement: permission to request a
++collection is distinct from permission to see every resource in that
++collection. The backend may maintain one global canonical cache, but it must
++produce per-user snapshots and events using the same resource-scope policy.
++The global cache must never be sent directly to a frontend connection.
++Changes to a user's effective access must be reflected in subsequent
++snapshots/events, including removal of resources that are no longer visible.
++
++The frontend may consume effective capabilities derived from this policy to
++show or hide navigation and actions. These capabilities are advisory UI data;
++the backend must independently evaluate every query and command request.
++
+ ## 9. IPC Transport Architecture
+diff --git a/docs/architecture/1.0 implementation-plan-v3.6.md b/docs/architecture/1.0 implementation-plan-v3.6.md
+--- a/docs/architecture/1.0 implementation-plan-v3.6.md
++++ b/docs/architecture/1.0 implementation-plan-v3.6.md
+@@ -1175,1 +1175,140 @@
++### 10.1 Central operation authorization matrix
++
++Phase 6 must generalize the authorization mechanism proven by the Node
++vertical slice into a data-driven operation registry. The operation policy
++must be defined once and consumed by the Go backend. Do not hardcode separate
++role-to-permission tables in individual handlers or duplicate the policy in
++the React frontend.
++
++#### Policy source and runtime configuration
++
++Repository source:
++
++```text
++config/authorization/operations.yaml
++```
++
++Installed runtime file:
++
++```text
++/etc/cockpit-slurm/operations.yaml
++```
++
++Go implementation:
++
++```text
++internal/authorization/
++    registry.go
++    registry_loader.go
++    policy.go
++    evaluator.go
++    testdata/
++```
++
++The exact filenames may follow the existing package conventions, but the
++responsibilities must remain separated: parse and validate configuration,
++construct the immutable registry, and evaluate policy against the trusted
++requesting identity and target resource.
++
++The configuration file must be owned by root (or the system package manager)
++and must not be writable by the `cockpit-slurm` service account. The daemon
++needs read access only. The initial implementation loads and validates the
++configuration during startup; an invalid or unreadable configuration must
++prevent command/query services from becoming available rather than silently
++falling back to permissive defaults. Runtime reload is out of scope unless a
++separate atomic-reload design is implemented.
++
++#### YAML and registry contract
++
++Each operation entry must define:
++
++* a `status` of `enabled` or `planned`;
++* a stable, allowlisted Go `handler` name;
++* a unique `operation_id` used by the application protocol/registry;
++* the canonical `resource` and operation `action`;
++* a `policy_basis` identifying application policy or Slurm-native policy;
++* exactly one permission cell for each of `Administrator`, `Operator`,
++  `Coordinator`, and `User`.
++
++The YAML must not contain executable paths, shell fragments, arbitrary
++command templates, or Go function names supplied by an administrator. A
++handler name is only a key resolved against a compiled allowlist of registered
++handlers. Unknown enabled handlers and duplicate operation IDs must fail
++validation. Planned entries are validated as policy data but are not registered
++or executable.
++
++The loader must validate the schema version, supported Slurm version, role
++set, permission tokens, resource/action values, required fields, status,
++duplicate enabled operation IDs, and completeness of all four role cells. Unknown
++permission tokens and incomplete entries must fail closed. The resulting
++registry must be immutable while requests are being evaluated.
++
++Permission values have the semantics defined in architecture §8.5. The
++evaluator must return a structured authorization decision (allowed/denied,
++reason, operation ID, and relevant scope), not only a Boolean. `allow` means
++only that application policy permits invoking the operation; it does not
++bypass Slurm-native checks, request validation, resource scope, or execution
++identity requirements.
++
++#### Identity, scope, and execution requirements
++
++* Derive the requesting UID/GID and username from the authenticated IPC
++  connection. Never accept identity, role, ownership, or coordinator scope
++  from the request payload.
++* Evaluate ownership and coordinator rules against the canonical target
++  resource and trusted SlurmDB identity/association data.
++* Preserve the original requesting user's authorization identity when a
++  privileged helper is used. The helper's UID must not be substituted for the
++  requester when evaluating policy.
++* Ensure commands whose Slurm semantics depend on the submitting user
++  execute with an identity-preserving mechanism. Do not assume that running a
++  command as `cockpit-slurm`, root, or SlurmUser is equivalent to running it
++  as the requesting user.
++* Apply resource-level filtering to query snapshots and streamed events.
++  Collection-level `allow` does not grant unrestricted visibility.
++* Re-evaluate authorization on every request. Frontend capabilities are
++  derived presentation data, not authorization credentials.
++
++#### Slurm command policy boundaries
++
++The matrix must describe the Cockpit operations actually implemented, not
++every possible CLI subcommand or option. Keep command families distinct:
++
++* `sinfo` and `squeue`: application permission to request node/job data is
++  separate from per-user visibility filtering and Slurm `PrivateData` rules.
++* `sbatch`, `salloc`, and `srun`: application permission to submit, allocate,
++  or launch does not bypass Slurm association, account, partition, QOS, limit,
++  or identity checks.
++* `scontrol`: define separate entries for each supported resource/action;
++  do not apply one broad permission to all `scontrol` operations.
++* `scancel`: distinguish direct job ownership, Operator/Administrator
++  privileges, and account-coordinator scope.
++* `sacctmgr`: define entity/action/field-specific operations. Do not create a
++  generic `sacctmgr.modify` permission that grants Coordinators unrestricted
++  accounting database administration.
++
++The initial YAML is a policy baseline, not a substitute for verification
++against the installed Slurm 25.05.7 manuals and cluster behavior. Any entry
++whose native authorization semantics have not been verified must not be
++enabled in a production build.
++
++#### Tests and acceptance criteria
++
++Phase 6 authorization work is complete when:
++
++* the YAML loads into the backend registry without hardcoded duplicate
++  permission tables;
++* invalid schema versions, unknown handlers/tokens, duplicate IDs, and
++  missing role cells are rejected;
++* each permission token has positive and negative unit tests;
++* direct-owner, effective-owner, and account-coordinator decisions are tested
++  with resources from both inside and outside the user's scope;
++* query snapshots and streamed events apply the same per-user visibility
++  policy;
++* command authorization uses the original IPC requester identity, including
++  through privileged-helper execution;
++* frontend capabilities are derived from backend policy and cannot grant
++  access independently;
++* Slurm 25.05.7 integration tests cover each enabled command operation;
++* `go test ./...` and `go vet ./...` pass.
+ # 11. Phase 7 — React Architecture
+diff --git a/config/authorization/operations.yaml b/config/authorization/operations.yaml
+new file mode 100644
+--- /dev/null
++++ b/config/authorization/operations.yaml
+@@ -0,0 +1,264 @@
++# cockpit-slurm operation authorization policy.
++#
++# Source of truth in the repository:
++#   config/authorization/operations.yaml
++# Installed runtime copy:
++#   /etc/cockpit-slurm/operations.yaml
++#
++# This initial matrix records enabled and planned operations for the resource
++# system. Mark an entry enabled only after its handler exists and its Slurm
++# 25.05.7 authorization semantics have been verified.
++# The policy controls application authorization; it does not replace Slurm's
++# own association, account, partition, QOS, resource, or command validation.
++
++version: 1
++
++slurm:
++  supported_version: "25.05.7"
++  documentation_basis: "Slurm 25.05.7 manuals; verify against the installed release"
++
++roles:
++  - Administrator
++  - Operator
++  - Coordinator
++  - User
++
++# Permission cell values:
++#   allow                         Application policy permits the operation.
++#   deny                          Always deny the operation.
++#   direct_owner                  User owns the target job/step.
++#   effective_owner               Direct owner or coordinator of target job account.
++#   account_coordinator            Target account is in UserContext.CoordinatorAccounts.
++#   slurm_admin                   root, SlurmUser, or Slurm AdminLevel=Administrator.
++#   slurm_privileged              Slurm admin or AdminLevel=Operator.
++#   direct_owner_or_slurm_admin_identity
++#                                 Direct owner, root, or SlurmUser. This is
++#                                 intentionally narrower than slurm_admin.
++#   direct_owner_or_account_coordinator
++#                                 Direct owner or coordinator of the target account.
++#
++# `allow` grants only permission to invoke this application operation. It does
++# not bypass Slurm-native checks or per-resource data visibility filtering.
++# The evaluator must fail closed for unknown values and missing role cells.
++
++operations:
++  # The only enabled entries in this baseline are the Phase 5 Node operations.
++  # Confirm the handler names against the current registry before merging.
++  - status: enabled
++    handler: scontrol.update.node
++    operation_id: node.drain
++    resource: node
++    action: drain
++    policy_basis: slurm
++    roles:
++      Administrator: slurm_admin
++      Operator: deny
++      Coordinator: deny
++      User: deny
++
++  - status: enabled
++    handler: scontrol.update.node
++    operation_id: node.resume
++    resource: node
++    action: resume
++    policy_basis: slurm
++    roles:
++      Administrator: slurm_admin
++      Operator: deny
++      Coordinator: deny
++      User: deny
++
++  # Planned entries are policy design examples only. The loader must validate
++  # their schema but must not register them until the corresponding Go handler
++  # is implemented and the Slurm 25.05.7 behavior has been verified.
++  - status: planned
++    handler: sinfo.query.nodes
++    operation_id: node.list
++    resource: node
++    action: list
++    policy_basis: application
++    roles:
++      Administrator: allow
++      Operator: allow
++      Coordinator: allow
++      User: allow
++
++  - status: planned
++    handler: squeue.query.jobs
++    operation_id: job.list
++    resource: job
++    action: list
++    policy_basis: application
++    roles:
++      Administrator: allow
++      Operator: allow
++      Coordinator: allow
++      User: allow
++
++  - status: planned
++    handler: sbatch.submit.job
++    operation_id: job.submit
++    resource: job
++    action: submit
++    policy_basis: application
++    roles:
++      Administrator: allow
++      Operator: allow
++      Coordinator: allow
++      User: allow
++
++  - status: planned
++    handler: salloc.allocate.job
++    operation_id: job.allocate
++    resource: job
++    action: allocate
++    policy_basis: application
++    roles:
++      Administrator: allow
++      Operator: allow
++      Coordinator: allow
++      User: allow
++
++  - status: planned
++    handler: srun.launch.job
++    operation_id: job.launch
++    resource: job
++    action: launch
++    policy_basis: application
++    roles:
++      Administrator: allow
++      Operator: allow
++      Coordinator: allow
++      User: allow
++
++  - status: planned
++    handler: scancel.job
++    operation_id: job.cancel
++    resource: job
++    action: cancel
++    policy_basis: slurm
++    roles:
++      Administrator: slurm_privileged
++      Operator: slurm_privileged
++      Coordinator: direct_owner_or_account_coordinator
++      User: direct_owner
++
++  - status: planned
++    handler: scontrol.update.job
++    operation_id: job.update
++    resource: job
++    action: update
++    policy_basis: slurm
++    roles:
++      Administrator: slurm_privileged
++      Operator: slurm_privileged
++      Coordinator: effective_owner
++      User: effective_owner
++
++  - status: planned
++    handler: scontrol.requeue.job
++    operation_id: job.requeue
++    resource: job
++    action: requeue
++    policy_basis: slurm
++    roles:
++      Administrator: slurm_privileged
++      Operator: slurm_privileged
++      Coordinator: effective_owner
++      User: effective_owner
++
++  - status: planned
++    handler: scontrol.suspend.job
++    operation_id: job.suspend
++    resource: job
++    action: suspend
++    policy_basis: slurm
++    roles:
++      Administrator: slurm_privileged
++      Operator: slurm_privileged
++      Coordinator: account_coordinator
++      User: deny
++
++  - status: planned
++    handler: scontrol.resume.job
++    operation_id: job.resume
++    resource: job
++    action: resume
++    policy_basis: slurm
++    roles:
++      Administrator: slurm_privileged
++      Operator: slurm_privileged
++      Coordinator: account_coordinator
++      User: deny
++
++  - status: planned
++    handler: scontrol.notify.job
++    operation_id: job.notify
++    resource: job
++    action: notify
++    policy_basis: slurm
++    roles:
++      Administrator: direct_owner_or_slurm_admin_identity
++      Operator: direct_owner
++      Coordinator: direct_owner
++      User: direct_owner
++
++  - status: planned
++    handler: sacctmgr.create.account
++    operation_id: account.create
++    resource: account
++    action: create
++    policy_basis: slurm
++    roles:
++      Administrator: slurm_privileged
++      Operator: slurm_privileged
++      Coordinator: deny
++      User: deny
++
++  - status: planned
++    handler: sacctmgr.add.subaccount
++    operation_id: account.create_child
++    resource: account
++    action: create_child
++    policy_basis: slurm
++    roles:
++      Administrator: slurm_privileged
++      Operator: slurm_privileged
++      Coordinator: account_coordinator
++      User: deny
++
++  - status: planned
++    handler: sacctmgr.add.user_to_account
++    operation_id: association.create
++    resource: association
++    action: create
++    policy_basis: slurm
++    roles:
++      Administrator: slurm_privileged
++      Operator: slurm_privileged
++      Coordinator: account_coordinator
++      User: deny
++
++  - status: planned
++    handler: sacctmgr.modify.association.limits
++    operation_id: association.update_limits
++    resource: association
++    action: update_limits
++    policy_basis: slurm
++    roles:
++      Administrator: slurm_privileged
++      Operator: slurm_privileged
++      Coordinator: account_coordinator
++      User: deny
++
++  - status: planned
++    handler: sacctmgr.dump.accounting
++    operation_id: accounting.dump
++    resource: accounting
++    action: dump
++    policy_basis: slurm
++    roles:
++      Administrator: slurm_admin
++      Operator: deny
++      Coordinator: deny
++      User: deny

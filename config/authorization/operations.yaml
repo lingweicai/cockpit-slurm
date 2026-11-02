@@ -1,0 +1,264 @@
+# cockpit-slurm operation authorization policy.
+#
+# Source of truth in the repository:
+#   config/authorization/operations.yaml
+# Installed runtime copy:
+#   /etc/cockpit-slurm/operations.yaml
+#
+# This initial matrix records enabled and planned operations for the resource
+# system. Mark an entry enabled only after its handler exists and its Slurm
+# 25.05.7 authorization semantics have been verified.
+# The policy controls application authorization; it does not replace Slurm's
+# own association, account, partition, QOS, resource, or command validation.
+
+version: 1
+
+slurm:
+  supported_version: "25.05.7"
+  documentation_basis: "Slurm 25.05.7 manuals; verify against the installed release"
+
+roles:
+  - Administrator
+  - Operator
+  - Coordinator
+  - User
+
+# Permission cell values:
+#   allow                         Application policy permits the operation.
+#   deny                          Always deny the operation.
+#   direct_owner                  User owns the target job/step.
+#   effective_owner               Direct owner or coordinator of target job account.
+#   account_coordinator            Target account is in UserContext.CoordinatorAccounts.
+#   slurm_admin                   root, SlurmUser, or Slurm AdminLevel=Administrator.
+#   slurm_privileged              Slurm admin or AdminLevel=Operator.
+#   direct_owner_or_slurm_admin_identity
+#                                 Direct owner, root, or SlurmUser. This is
+#                                 intentionally narrower than slurm_admin.
+#   direct_owner_or_account_coordinator
+#                                 Direct owner or coordinator of the target account.
+#
+# `allow` grants only permission to invoke this application operation. It does
+# not bypass Slurm-native checks or per-resource data visibility filtering.
+# The evaluator must fail closed for unknown values and missing role cells.
+
+operations:
+  # The only enabled entries in this baseline are the Phase 5 Node operations.
+  # Confirm the handler names against the current registry before merging.
+  - status: enabled
+    handler: scontrol.update.node
+    operation_id: node.drain
+    resource: node
+    action: drain
+    policy_basis: slurm
+    roles:
+      Administrator: slurm_admin
+      Operator: deny
+      Coordinator: deny
+      User: deny
+
+  - status: enabled
+    handler: scontrol.update.node
+    operation_id: node.resume
+    resource: node
+    action: resume
+    policy_basis: slurm
+    roles:
+      Administrator: slurm_admin
+      Operator: deny
+      Coordinator: deny
+      User: deny
+
+  # Planned entries are policy design examples only. The loader must validate
+  # their schema but must not register them until the corresponding Go handler
+  # is implemented and the Slurm 25.05.7 behavior has been verified.
+  - status: planned
+    handler: sinfo.query.nodes
+    operation_id: node.list
+    resource: node
+    action: list
+    policy_basis: application
+    roles:
+      Administrator: allow
+      Operator: allow
+      Coordinator: allow
+      User: allow
+
+  - status: planned
+    handler: squeue.query.jobs
+    operation_id: job.list
+    resource: job
+    action: list
+    policy_basis: application
+    roles:
+      Administrator: allow
+      Operator: allow
+      Coordinator: allow
+      User: allow
+
+  - status: planned
+    handler: sbatch.submit.job
+    operation_id: job.submit
+    resource: job
+    action: submit
+    policy_basis: application
+    roles:
+      Administrator: allow
+      Operator: allow
+      Coordinator: allow
+      User: allow
+
+  - status: planned
+    handler: salloc.allocate.job
+    operation_id: job.allocate
+    resource: job
+    action: allocate
+    policy_basis: application
+    roles:
+      Administrator: allow
+      Operator: allow
+      Coordinator: allow
+      User: allow
+
+  - status: planned
+    handler: srun.launch.job
+    operation_id: job.launch
+    resource: job
+    action: launch
+    policy_basis: application
+    roles:
+      Administrator: allow
+      Operator: allow
+      Coordinator: allow
+      User: allow
+
+  - status: planned
+    handler: scancel.job
+    operation_id: job.cancel
+    resource: job
+    action: cancel
+    policy_basis: slurm
+    roles:
+      Administrator: slurm_privileged
+      Operator: slurm_privileged
+      Coordinator: direct_owner_or_account_coordinator
+      User: direct_owner
+
+  - status: planned
+    handler: scontrol.update.job
+    operation_id: job.update
+    resource: job
+    action: update
+    policy_basis: slurm
+    roles:
+      Administrator: slurm_privileged
+      Operator: slurm_privileged
+      Coordinator: effective_owner
+      User: effective_owner
+
+  - status: planned
+    handler: scontrol.requeue.job
+    operation_id: job.requeue
+    resource: job
+    action: requeue
+    policy_basis: slurm
+    roles:
+      Administrator: slurm_privileged
+      Operator: slurm_privileged
+      Coordinator: effective_owner
+      User: effective_owner
+
+  - status: planned
+    handler: scontrol.suspend.job
+    operation_id: job.suspend
+    resource: job
+    action: suspend
+    policy_basis: slurm
+    roles:
+      Administrator: slurm_privileged
+      Operator: slurm_privileged
+      Coordinator: account_coordinator
+      User: deny
+
+  - status: planned
+    handler: scontrol.resume.job
+    operation_id: job.resume
+    resource: job
+    action: resume
+    policy_basis: slurm
+    roles:
+      Administrator: slurm_privileged
+      Operator: slurm_privileged
+      Coordinator: account_coordinator
+      User: deny
+
+  - status: planned
+    handler: scontrol.notify.job
+    operation_id: job.notify
+    resource: job
+    action: notify
+    policy_basis: slurm
+    roles:
+      Administrator: direct_owner_or_slurm_admin_identity
+      Operator: direct_owner
+      Coordinator: direct_owner
+      User: direct_owner
+
+  - status: planned
+    handler: sacctmgr.create.account
+    operation_id: account.create
+    resource: account
+    action: create
+    policy_basis: slurm
+    roles:
+      Administrator: slurm_privileged
+      Operator: slurm_privileged
+      Coordinator: deny
+      User: deny
+
+  - status: planned
+    handler: sacctmgr.add.subaccount
+    operation_id: account.create_child
+    resource: account
+    action: create_child
+    policy_basis: slurm
+    roles:
+      Administrator: slurm_privileged
+      Operator: slurm_privileged
+      Coordinator: account_coordinator
+      User: deny
+
+  - status: planned
+    handler: sacctmgr.add.user_to_account
+    operation_id: association.create
+    resource: association
+    action: create
+    policy_basis: slurm
+    roles:
+      Administrator: slurm_privileged
+      Operator: slurm_privileged
+      Coordinator: account_coordinator
+      User: deny
+
+  - status: planned
+    handler: sacctmgr.modify.association.limits
+    operation_id: association.update_limits
+    resource: association
+    action: update_limits
+    policy_basis: slurm
+    roles:
+      Administrator: slurm_privileged
+      Operator: slurm_privileged
+      Coordinator: account_coordinator
+      User: deny
+
+  - status: planned
+    handler: sacctmgr.dump.accounting
+    operation_id: accounting.dump
+    resource: accounting
+    action: dump
+    policy_basis: slurm
+    roles:
+      Administrator: slurm_admin
+      Operator: deny
+      Coordinator: deny
+      User: deny
