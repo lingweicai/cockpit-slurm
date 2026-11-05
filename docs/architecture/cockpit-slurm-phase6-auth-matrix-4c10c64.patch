@@ -1,0 +1,306 @@
+diff --git a/docs/architecture/0.1 development-cockpit-slurm-_v3.6.md b/docs/architecture/0.1 development-cockpit-slurm-_v3.6.md
+--- a/docs/architecture/0.1 development-cockpit-slurm-_v3.6.md
++++ b/docs/architecture/0.1 development-cockpit-slurm-_v3.6.md
+@@ -891,9 +891,28 @@ flags:
+ | `account_coordinator` | The target account is in the requesting user's coordinator-account set. |
+ | `slurm_admin` | The requesting identity is root, SlurmUser, or Slurm AdminLevel=Administrator. |
++| `slurm_admin_level_admin` | The requesting identity has a currently resolved Slurm `AdminLevel=Administrator`; root and SlurmUser do not satisfy this predicate unless they independently have that AdminLevel. |
+ | `slurm_privileged` | The requesting identity is a Slurm administrator or AdminLevel=Operator. |
+ | `direct_owner_or_slurm_admin_identity` | The requester is the direct owner, root, or SlurmUser. |
+ | `direct_owner_or_account_coordinator` | The requester is the direct owner or a coordinator of the target account. |
+ The backend evaluates the selected cell against the server-derived
+ `UserContext` and the canonical target resource. Unknown policy values,
+ missing role cells, unknown operations, and unresolved resource scope must
+ fail closed. A role label or frontend-supplied account/resource identifier
+ must never establish ownership or coordinator scope.
++
++The `node.drain` and `node.resume` operations MUST preserve the accepted
++Phase 5 authorization predicate: only a requester whose current, server-resolved
++Slurm `AdminLevel` is `Administrator` is permitted. Their policy cells MUST
++use `slurm_admin_level_admin`, not `slurm_admin`, because `slurm_admin` also
++includes root and the configured SlurmUser. The application role
++`Administrator` alone is not sufficient.
++
++Each operation entry MUST declare `operation_type: query` or
++`operation_type: command`, independently of `status` (`enabled` or `planned`).
++Use one validated policy source and one evaluator, but build separate
++registries: enabled query entries are registered only in the query-policy
++registry; enabled command entries are registered only in the command registry.
++Planned entries are validated but registered in neither registry and cannot
++be invoked. Query registration MUST NOT make an entry command-dispatchable,
++or vice versa.
++
++The policy file is required trusted startup configuration. Missing, unreadable,
++malformed, incomplete, or semantically invalid configuration MUST prevent
++daemon startup/readiness. Neither query nor command services may become
++available with a partial registry, permissive defaults, or a fallback policy.
++Publish both registries atomically only after complete validation succeeds.
+@@ -905,6 +924,10 @@ itself, proof that Slurm will accept the operation.
+ Read authorization has an additional requirement: permission to request a
+ collection is distinct from permission to see every resource in that
+ collection. The backend may maintain one global canonical cache, but it must
+ produce per-user snapshots and events using the same resource-scope policy.
++Enabled `node.list` and `job.list` query policies authorize collection
++requests only. They do not grant unrestricted access to cached Node or Job
++records. The same trusted per-resource scope evaluator MUST filter snapshots,
++query responses, and subsequent events.
+ The global cache must never be sent directly to a frontend connection.
+ Changes to a user's effective access must be reflected in subsequent
+ snapshots/events, including removal of resources that are no longer visible.
+diff --git a/docs/architecture/1.0 implementation-plan-v3.6.md b/docs/architecture/1.0 implementation-plan-v3.6.md
+--- a/docs/architecture/1.0 implementation-plan-v3.6.md
++++ b/docs/architecture/1.0 implementation-plan-v3.6.md
+@@ -1140,6 +1140,13 @@
+ The exact filenames may follow the existing package conventions, but the
+ responsibilities must remain separated: parse and validate configuration,
+ construct the immutable registry, and evaluate policy against the trusted
+ requesting identity and target resource.
++Use one policy source and one evaluator, but maintain separate query-policy
++and command registries. Every entry MUST declare `operation_type: query` or
++`operation_type: command` in addition to `status`. Enabled query entries are
++registered only in the query-policy registry; enabled command entries are
++registered only in the command registry. Planned entries are validated but
++registered in neither registry. Query and command dispatch remain separate.
+ The configuration file must be owned by root (or the system package manager)
+ and must not be writable by the `cockpit-slurm` service account. The daemon
+ needs read access only. The initial implementation loads and validates the
+-configuration during startup; an invalid or unreadable configuration must
+-prevent command/query services from becoming available rather than silently
+-falling back to permissive defaults. Runtime reload is out of scope unless a
+-separate atomic-reload design is implemented.
++configuration during startup. Missing, unreadable, malformed, incomplete, or
++semantically invalid configuration MUST fail daemon startup/readiness. Neither
++query nor command services may become available with a partial registry,
++permissive defaults, or a fallback policy. Publish both registries atomically
++only after complete validation. Runtime reload is out of scope unless a
++separate atomic-reload design is implemented.
+@@ -1153,6 +1160,7 @@
+ Each operation entry must define:
+ 
++* an `operation_type` of `query` or `command`;
+ * a `status` of `enabled` or `planned`;
+ * a stable, allowlisted Go `handler` name;
+@@ -1164,12 +1172,16 @@
+ handlers. Unknown enabled handlers and duplicate operation IDs must fail
+-validation. Planned entries are validated as policy data but are not registered
+-or executable.
++validation. An enabled query entry is registered only in the query-policy
++registry; an enabled command entry is registered only in the command registry.
++Planned entries are validated as policy data but are registered in neither
++registry and are not executable. A query entry must never become command
++dispatchable, or vice versa.
+ The loader must validate the schema version, supported Slurm version, role
+-set, permission tokens, resource/action values, required fields, status,
++set, permission tokens, resource/action values, required fields,
++`operation_type`, status,
+ duplicate enabled operation IDs, and completeness of all four role cells. Unknown
+ permission tokens and incomplete entries must fail closed. The resulting
+ registry must be immutable while requests are being evaluated.
+@@ -1190,6 +1202,10 @@ identity requirements.
+ * Apply resource-level filtering to query snapshots and streamed events.
+   Collection-level `allow` does not grant unrestricted visibility.
++* Enable `node.list` and `job.list` as query operations for Phase 6 and register
++  them only in the query-policy registry. Their collection permission does not
++  bypass per-resource filtering of snapshots, query responses, or events.
+ * Re-evaluate authorization on every request. Frontend capabilities are
+ derived presentation data, not authorization credentials.
+diff --git a/docs/architecture/4.5 Implementation-phase6.md b/docs/architecture/4.5 Implementation-phase6.md
+--- a/docs/architecture/4.5 Implementation-phase6.md
++++ b/docs/architecture/4.5 Implementation-phase6.md
+@@ -286,15 +286,34 @@
+ ## 11. Command infrastructure and authorization
+ Phase 6 MUST preserve the Phase 5 Node command and authorization path. Job mutations are out of scope, so Phase 6 MUST NOT implement Job command handlers or refactor command infrastructure speculatively. Keep Node operations, validation, authorization, ledger behavior, execution boundary, and lifecycle unchanged except for fixes required by a failing regression test and separately reviewed.
+ Limited extraction of common dispatch/registration mechanics is permitted only when Stage A/B identifies concrete duplication and all Phase 5 invariants remain unchanged.
++
++### 11.1 Central authorization policy integration
++
++Phase 6 MUST integrate the central policy in `config/authorization/operations.yaml`
++as defined by architecture §8.5 and implementation plan §10.1.
++
++Requirements:
++1. Load and fully validate the policy during backend initialization. The file
++   MUST be administrator-managed and MUST NOT be writable by `cockpit-slurm`.
++2. Every entry MUST declare `operation_type: query` or `operation_type: command`,
++   independently of `status: enabled|planned`.
++3. Use one policy source and evaluator, but separate immutable registries:
++   enabled query entries go only to the query-policy registry; enabled command
++   entries go only to the command registry. Planned entries are validated but
++   registered in neither registry and cannot be invoked.
++4. Resolve handler names only through the compiled Go handler allowlist. YAML
++   MUST NOT define arbitrary executables, shell fragments, or command templates.
++5. Integrate the existing Phase 5 Node operations with the command registry.
++   Preserve operation IDs, validation, authorization decisions, command ledger,
++   audit context, execution boundary, lifecycle, and error behavior.
++6. Evaluate permission cells against server-derived identity and canonical
++   target resources. Client-supplied role, ownership, or account claims MUST NOT
++   establish authorization.
++7. Keep application permissions, Slurm-native authorization, resource scope,
++   and command execution identity as separate checks.
++8. Use the shared evaluator for query visibility and command authorization.
++   Collection-level query permission MUST NOT imply unrestricted visibility.
++9. Frontend capabilities are advisory. Every backend query and command MUST
++   be independently authorized.
++
++If the policy is missing, unreadable, malformed, incomplete, or semantically
++invalid, daemon initialization MUST fail. Neither query nor command services
++may become ready with a partial registry, permissive defaults, or fallback
++policy. Publish both registries only after complete validation.
++
++The accepted Phase 5 Node authorization semantics MUST remain unchanged:
++`node.drain` and `node.resume` require a currently resolved Slurm
++`AdminLevel=Administrator`. Use `slurm_admin_level_admin`, not `slurm_admin`,
++which also includes root and SlurmUser. The application role `Administrator`
++alone does not satisfy this predicate.
++
++Phase 6 enabled policy entries are:
++- Query-policy registry: `node.list` and `job.list`.
++- Command registry: `node.drain` and `node.resume`.
++- All other entries remain `planned`, validated only, and absent from both
++  registries.
++
++Job snapshot/query and Node/Job event delivery MUST apply trusted per-resource
++visibility filtering. When access is revoked, resources no longer visible MUST
++be removed from the affected connection's frontend projection through the
++established event/snapshot recovery contract.
+@@ -378,6 +397,7 @@
+ 4. Do not change resource-specific command definitions, semantics, or execution behavior.
++5. Verify `node.drain` and `node.resume` allow only a currently resolved Slurm
++   `AdminLevel=Administrator`; root and SlurmUser must not gain access solely
++   through the broader `slurm_admin` predicate.
+ **Exit condition:** all accepted Phase 5 Node command and authorization regression tests pass with no privilege expansion or semantic redesign. Any shared mechanism is limited to dispatch/lookup/validation conventions justified by existing Node code.
+ 
+ 6. Verify that the enabled Node operation entries are loaded from `operations.yaml` and that their authorization decisions match the accepted Phase 5 behavior for Administrator, Operator, Coordinator, and User test identities.
+-7. Verify that missing, malformed, incomplete, or invalid authorization configuration fails closed, and that planned operations cannot be invoked.
++7. Verify enabled `node.list` and `job.list` entries are registered only in the query-policy registry, and enabled Node command entries only in the command registry.
++8. Verify missing, unreadable, malformed, incomplete, or invalid configuration prevents daemon startup/readiness without partial/default registries.
++9. Verify planned operations are validated but cannot be invoked through query or command dispatch.
+@@ -395,6 +415,9 @@
+ 10. Verify that frontend capabilities do not grant access independently of backend authorization.
++11. Apply the enabled `job.list` query policy before returning a collection, then filter each Job using trusted resource scope. Apply corresponding `node.list` policy and resource-scope filtering to Node snapshots, query responses, and events.
++12. Verify access revocation removes previously visible Node and Job records from affected frontend projections; collection permission MUST NOT bypass record-level filtering.
+@@ -450,6 +473,10 @@
+ - The central policy configuration loads successfully and produces the expected enabled Node registry entries.
+-- Missing or invalid policy configuration fails closed.
++- Missing, unreadable, malformed, incomplete, or semantically invalid policy configuration prevents daemon startup/readiness; neither query nor command services become available.
+ - Planned operations cannot be invoked.
+ - Node authorization decisions remain equivalent to the accepted Phase 5 behavior.
++- Node drain/resume allow only a currently resolved Slurm `AdminLevel=Administrator`; root and SlurmUser are not implicitly included.
++- `node.list` and `job.list` are registered only in the query-policy registry; Node drain/resume are registered only in the command registry.
++- Planned entries are validated but appear in neither registry.
+ - Job snapshots and events do not disclose resources outside the requesting user's effective visibility scope.
++- Node snapshots, query responses, and events apply the same trusted resource-scope filtering.
+ - Access revocation removes previously visible resources from the user's projection.
+@@ -494,6 +521,12 @@
+ - [ ] The central authorization matrix is the policy source for enabled Node operations.
+-- [ ] Planned operations are validated but cannot be executed.
++- [ ] `node.list` and `job.list` are enabled query policies and registered only in the query-policy registry.
++- [ ] `node.drain` and `node.resume` are enabled command operations and registered only in the command registry.
++- [ ] Planned operations are validated but registered in neither registry and cannot be executed.
+ - [ ] Phase 5 Node authorization behavior and command lifecycle remain unchanged.
++- [ ] Node drain/resume require current Slurm `AdminLevel=Administrator`; root and SlurmUser are not implicitly authorized.
+ - [ ] Job snapshots and events enforce per-user resource visibility.
++- [ ] Node snapshots, query responses, and events enforce trusted per-resource visibility.
+ - [ ] Query visibility and command authorization use trusted server-side identity and resource scope.
+-- [ ] Invalid authorization configuration fails closed.
++- [ ] Missing, unreadable, malformed, incomplete, or invalid policy configuration prevents daemon startup/readiness without partial/default registries.
+diff --git a/config/authorization/operations.yaml b/config/authorization/operations.yaml
+--- a/config/authorization/operations.yaml
++++ b/config/authorization/operations.yaml
+@@ -7,8 +7,9 @@
+-# This initial matrix records enabled and planned operations for the resource
+-# system. Mark an entry enabled only after its handler exists and its Slurm
+-# 25.05.7 authorization semantics have been verified.
++# Each entry declares its query/command registration path independently of
++# enabled/planned status. Enabled query policies and command handlers are
++# registered separately; planned entries are validated but never registered.
+@@ -23,6 +23,8 @@
+ #   account_coordinator            Target account is in UserContext.CoordinatorAccounts.
+ #   slurm_admin                   root, SlurmUser, or Slurm AdminLevel=Administrator.
++#   slurm_admin_level_admin       Currently resolved Slurm AdminLevel=Administrator only;
++#                                root and SlurmUser do not qualify by identity alone.
+ #   slurm_privileged              Slurm admin or AdminLevel=Operator.
+@@ -40,11 +42,13 @@
+ operations:
+-  # The only enabled entries in this baseline are the Phase 5 Node operations.
+-  # Confirm the handler names against the current registry before merging.
++  # Enabled query entries authorize collection requests only. Per-resource
++  # visibility filtering remains mandatory for snapshots, queries, and events.
+   - status: enabled
++    operation_type: command
+     handler: scontrol.update.node
+@@ -49,7 +53,7 @@
+-      Administrator: slurm_admin
++      Administrator: slurm_admin_level_admin
+@@ -54,6 +58,7 @@
+   - status: enabled
++    operation_type: command
+     handler: scontrol.update.node
+@@ -61,7 +65,7 @@
+-      Administrator: slurm_admin
++      Administrator: slurm_admin_level_admin
+@@ -68,7 +72,8 @@
+-  - status: planned
++  - status: enabled
++    operation_type: query
+     handler: sinfo.query.nodes
+@@ -79,7 +83,8 @@
+-  - status: planned
++  - status: enabled
++    operation_type: query
+     handler: squeue.query.jobs
+@@ -91,6 +96,7 @@
+   - status: planned
++    operation_type: command
+     handler: sbatch.submit.job
+@@ -102,6 +108,7 @@
+   - status: planned
++    operation_type: command
+     handler: salloc.allocate.job
+@@ -114,6 +121,7 @@
+   - status: planned
++    operation_type: command
+     handler: srun.launch.job
+@@ -125,6 +133,7 @@
+   - status: planned
++    operation_type: command
+     handler: scancel.job
+@@ -136,6 +145,7 @@
+   - status: planned
++    operation_type: command
+     handler: scontrol.update.job
+@@ -147,6 +157,7 @@
+   - status: planned
++    operation_type: command
+     handler: scontrol.requeue.job
+@@ -158,6 +169,7 @@
+   - status: planned
++    operation_type: command
+     handler: scontrol.suspend.job
+@@ -169,6 +181,7 @@
+   - status: planned
++    operation_type: command
+     handler: scontrol.resume.job
+@@ -180,6 +193,7 @@
+   - status: planned
++    operation_type: command
+     handler: scontrol.notify.job
+@@ -191,6 +205,7 @@
+   - status: planned
++    operation_type: command
+     handler: sacctmgr.create.account
+@@ -202,6 +217,7 @@
+   - status: planned
++    operation_type: command
+     handler: sacctmgr.add.subaccount
+@@ -213,6 +229,7 @@
+   - status: planned
++    operation_type: command
+     handler: sacctmgr.add.user_to_account
+@@ -224,6 +241,7 @@
+   - status: planned
++    operation_type: command
+     handler: sacctmgr.modify.association.limits
+@@ -235,6 +253,7 @@
+   - status: planned
++    operation_type: command
+     handler: sacctmgr.dump.accounting

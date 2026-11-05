@@ -5,9 +5,9 @@
 # Installed runtime copy:
 #   /etc/cockpit-slurm/operations.yaml
 #
-# This initial matrix records enabled and planned operations for the resource
-# system. Mark an entry enabled only after its handler exists and its Slurm
-# 25.05.7 authorization semantics have been verified.
+# Each entry declares its query/command registration path independently of
+# enabled/planned status. Enabled query policies and command handlers are
+# registered separately; planned entries are validated but never registered.
 # The policy controls application authorization; it does not replace Slurm's
 # own association, account, partition, QOS, resource, or command validation.
 
@@ -30,6 +30,8 @@ roles:
 #   effective_owner               Direct owner or coordinator of target job account.
 #   account_coordinator            Target account is in UserContext.CoordinatorAccounts.
 #   slurm_admin                   root, SlurmUser, or Slurm AdminLevel=Administrator.
+#   slurm_admin_level_admin       Currently resolved Slurm AdminLevel=Administrator only;
+#                                root and SlurmUser do not qualify by identity alone.
 #   slurm_privileged              Slurm admin or AdminLevel=Operator.
 #   direct_owner_or_slurm_admin_identity
 #                                 Direct owner, root, or SlurmUser. This is
@@ -42,28 +44,30 @@ roles:
 # The evaluator must fail closed for unknown values and missing role cells.
 
 operations:
-  # The only enabled entries in this baseline are the Phase 5 Node operations.
-  # Confirm the handler names against the current registry before merging.
+  # Enabled query entries authorize collection requests only. Per-resource
+  # visibility filtering remains mandatory for snapshots, queries, and events.
   - status: enabled
+    operation_type: command
     handler: scontrol.update.node
     operation_id: node.drain
     resource: node
     action: drain
     policy_basis: slurm
     roles:
-      Administrator: slurm_admin
+      Administrator: slurm_admin_level_admin      
       Operator: deny
       Coordinator: deny
       User: deny
 
   - status: enabled
+    operation_type: command
     handler: scontrol.update.node
     operation_id: node.resume
     resource: node
     action: resume
     policy_basis: slurm
     roles:
-      Administrator: slurm_admin
+      Administrator: slurm_admin_level_admin
       Operator: deny
       Coordinator: deny
       User: deny
@@ -71,8 +75,9 @@ operations:
   # Planned entries are policy design examples only. The loader must validate
   # their schema but must not register them until the corresponding Go handler
   # is implemented and the Slurm 25.05.7 behavior has been verified.
-  - status: planned
-    handler: sinfo.query.nodes
+  - status: enabled
+    operation_type: query    
+    handler: scontrol.show.nodes
     operation_id: node.list
     resource: node
     action: list
@@ -83,8 +88,9 @@ operations:
       Coordinator: allow
       User: allow
 
-  - status: planned
-    handler: squeue.query.jobs
+  - status: enabled
+    operation_type: query
+    handler: scontrol.show.jobs
     operation_id: job.list
     resource: job
     action: list
@@ -96,6 +102,7 @@ operations:
       User: allow
 
   - status: planned
+    operation_type: command
     handler: sbatch.submit.job
     operation_id: job.submit
     resource: job
@@ -108,6 +115,7 @@ operations:
       User: allow
 
   - status: planned
+    operation_type: command
     handler: salloc.allocate.job
     operation_id: job.allocate
     resource: job
@@ -120,6 +128,7 @@ operations:
       User: allow
 
   - status: planned
+    operation_type: command
     handler: srun.launch.job
     operation_id: job.launch
     resource: job
@@ -132,6 +141,7 @@ operations:
       User: allow
 
   - status: planned
+    operation_type: command
     handler: scancel.job
     operation_id: job.cancel
     resource: job
@@ -144,6 +154,7 @@ operations:
       User: direct_owner
 
   - status: planned
+    operation_type: command
     handler: scontrol.update.job
     operation_id: job.update
     resource: job
@@ -156,6 +167,7 @@ operations:
       User: effective_owner
 
   - status: planned
+    operation_type: command
     handler: scontrol.requeue.job
     operation_id: job.requeue
     resource: job
@@ -168,6 +180,7 @@ operations:
       User: effective_owner
 
   - status: planned
+    operation_type: command
     handler: scontrol.suspend.job
     operation_id: job.suspend
     resource: job
@@ -180,6 +193,7 @@ operations:
       User: deny
 
   - status: planned
+    operation_type: command
     handler: scontrol.resume.job
     operation_id: job.resume
     resource: job
@@ -192,6 +206,7 @@ operations:
       User: deny
 
   - status: planned
+    operation_type: command
     handler: scontrol.notify.job
     operation_id: job.notify
     resource: job
@@ -204,6 +219,7 @@ operations:
       User: direct_owner
 
   - status: planned
+    operation_type: command
     handler: sacctmgr.create.account
     operation_id: account.create
     resource: account
@@ -216,6 +232,7 @@ operations:
       User: deny
 
   - status: planned
+    operation_type: command
     handler: sacctmgr.add.subaccount
     operation_id: account.create_child
     resource: account
@@ -228,6 +245,7 @@ operations:
       User: deny
 
   - status: planned
+    operation_type: command
     handler: sacctmgr.add.user_to_account
     operation_id: association.create
     resource: association
@@ -240,6 +258,7 @@ operations:
       User: deny
 
   - status: planned
+    operation_type: command
     handler: sacctmgr.modify.association.limits
     operation_id: association.update_limits
     resource: association
@@ -252,6 +271,7 @@ operations:
       User: deny
 
   - status: planned
+    operation_type: command
     handler: sacctmgr.dump.accounting
     operation_id: accounting.dump
     resource: accounting
