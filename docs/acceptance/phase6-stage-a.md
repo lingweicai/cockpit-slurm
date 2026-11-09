@@ -54,6 +54,14 @@ This recheck is read-only and does not change the acceptance decision.
 - The transcript's projected `.meta.data_parser` value was `null`, so parser-plugin/version evidence remains unavailable from this query. The included completed Job also means the selected source's active-state filtering rule must be defined and tested before it can populate the active-Job collection.
 - The accompanying `sinfo` output showed the `normal` partition up, with `c22` and `c23` allocated and `c21` and `c24` idle. This is an operator-provided point-in-time scheduler view, not evidence that the Job snapshot covers all configured partitions or all active states.
 
+The current candidate support scope is limited to the tested Slurm 25.05.7
+configuration and its enumerated non-hidden partitions. The supplied inventory
+reports only `normal`, with `Hidden=NO`. Deployments with hidden partitions are
+not supported by this evidence; support for them requires a separate complete
+enumeration comparison under the actual data-acquisition identity and explicit
+review. Re-run the partition inventory below on `sms10` before treating this
+restriction as verified for the target installation.
+
 ### Stream and policy implementation audit
 
 - `internal/stream/node_registry.go` still registers a Node-only stream, sends the complete unfiltered Node snapshot, and fans out global `NodeChangeBatch` payloads. The payload has collection generation but no per-connection sequence or visibility projection.
@@ -62,6 +70,10 @@ This recheck is read-only and does not change the acceptance decision.
 - The architecture now defines `node.list` → `node.cluster` and `job.list` → `job.active`. Policy-loader implementation and reference-validation tests remain deferred to Stage B; no runtime policy configuration was changed in this recheck.
 
 ### Recheck commands
+
+The checks below are historical Stage A run results, not checks rerun for this
+documentation update. They are automated repository checks, not live
+Slurm/service-runtime verification:
 
 | Check | Result |
 | --- | --- |
@@ -76,7 +88,14 @@ This recheck is read-only and does not change the acceptance decision.
 | `npm run eslint` | Failed with 262 errors in `src/app.tsx`, `src/index.tsx`, `src/ipc/channel.ts`, `src/ipc/framing.test.ts`, `src/ipc/framing.ts`, and `src/ipc/node-query.ts`. |
 | `git diff --check` | Passed for the documentation changes. |
 
-No Slurm job was submitted, modified, or cancelled. No service restart, runtime configuration change, or privileged execution was performed.
+Live Slurm/service-runtime evidence is recorded separately in the source
+investigation sections above and below. Those read-only point-in-time samples
+do not establish complete enumeration or runtime failure behavior. No live
+integration test, service restart, production configuration change, or
+service-account execution was performed as part of the automated checks listed
+above.
+
+No Slurm job was submitted, modified, or cancelled, and no service restart or runtime configuration change was performed as part of the automated checks above. The service-account source probes recorded elsewhere were read-only operator-provided evidence.
 
 ## Held Array Sample (2026-11-09)
 
@@ -115,7 +134,7 @@ No Slurm job was submitted, modified, or cancelled. No service restart, runtime 
 - The owner selected `scontrol --all --local show job --json` under the `cockpit-slurm` identity with `SLURM_BITSTR_LEN=0` as the candidate for this tested Slurm 25.05.7 installation and observed `data_parser/v0.0.43`. This is not a completeness certification or approval of other versions or configurations; hidden-partition behavior remains unverified.
 - The owner approved normalization of the observed normal-Job zero/set combination to absent canonical array identifiers, preservation of individual array IDs including task zero, and preservation of array Job ID and nonempty task expression for aggregated placeholders. Retain cluster and source Job ID. Unknown, inconsistent, or ambiguous combinations reject the entire refresh without removals.
 - The owner approved independent fail-closed direct-owner and coordinator-account visibility branches: a missing account does not invalidate a valid direct-owner match, and a missing owner does not invalidate a valid coordinated-account match. Missing attributes never grant access; if neither applicable branch establishes access, deny. Privileged roles remain governed by their existing policy.
-- The owner approved one connection-wide Node/Job event sequence, no sequence use for hidden changes, identity-only visibility removals, authorization-context reconciliation, reconnect/fresh-snapshot recovery, and shared frontend sequence validation before provider dispatch. Preserve the existing automatic stream and transport; do not add another subscription or recovery mechanism.
+- The owner approved preserving the accepted Phase 4 stream contract: one connection-wide sequence across Node and Job events, independent authoritative collection generations, visibility filtering before sequence allocation, no sequence use for hidden changes, identity-only visibility removals, authorization-context reconciliation, reconnect/fresh-snapshot recovery, and shared frontend sequence validation before provider dispatch. Phase 6 brings the Node implementation into conformance and extends the same mechanism to Job events; it does not change the accepted Phase 4 architecture.
 - The owner approved the extraction direction below: resource-specific models, adapters, and collection generations; only demonstrated shared resource and stream mechanisms; separate query authorization and record visibility; and preservation of the Phase 5 command service, authorization, helper, ledger, and lifecycle without speculative generic command abstractions.
 - The owner requested an active-state proposal and review of the updated documents and remaining evidence limitations before any Stage A acceptance or Stage B work. No acceptance or Stage B authorization has been recorded.
 
@@ -128,19 +147,156 @@ No Slurm job was submitted, modified, or cancelled. No service restart, runtime 
 - The installed `squeue --helpstate` lists states beyond `PENDING` and `RUNNING`, including `SUSPENDED`, `COMPLETING`, `CONFIGURING`, and requeue states. The exact supported active-state and flag combinations, including transitions and unknown values, need a reviewed rule and representative evidence. Unknown or invalid state must not silently cause active-cache removals. Do not equate the default `squeue` view with the complete active population.
 - Stage B acceptance tests must simulate command failure, invalid/truncated JSON, abbreviated array expressions like the observed valid-JSON sample, invalid or ambiguous records, duplicate identities, oversized snapshots, and unchanged snapshots, and verify that failed refreshes leave the cache unchanged and emit no removals. Those are planned implementation tests, not tests performed in Stage A; source-side completeness still requires separate investigation.
 
+### Read-only verification procedure for `sms10`
+
+Run these probes on `sms10` while representative Jobs from the required owners
+and states are present. They read Slurm configuration and queue state; they do
+not submit, modify, hold, release, or cancel Jobs. Record the timestamp,
+command, exit status, stderr, Slurm version, and the complete unmodified output
+in the approved evidence location. Keep raw owner/account data protected; the
+Stage A record may summarize owner coverage by numeric UID and redact display
+names.
+
+1. **Verify the source execution identity and installation scope.**
+
+   ```sh
+   date -Is
+   systemctl show cockpit-slurm.service -p MainPID -p User -p Group -p ExecStart -p Environment -p EnvironmentFiles
+   systemctl cat cockpit-slurm.service
+   getent passwd cockpit-slurm
+   sudo -u cockpit-slurm id
+   sudo -u cockpit-slurm scontrol --version
+   sudo -u cockpit-slurm scontrol ping
+   sudo -u cockpit-slurm scontrol show config
+   sudo -u cockpit-slurm scontrol show partition
+   ```
+
+   Record the daemon's actual OS UID/GID, Slurm client and controller
+   versions, configured cluster name, `PrivateData`, `SlurmUser`, every
+   partition and its `Hidden`/state attributes, and any service environment
+   that affects Slurm access. Redact secret environment values from recorded
+   evidence. Ensure the source probes below use the same Slurm configuration
+   and relevant environment as the service; a bare `sudo -u` command does not
+   prove equivalence if the unit supplies additional configuration. A
+   partition inventory containing any hidden partition means this candidate
+   remains unsupported until hidden-partition enumeration is independently
+   verified and approved.
+
+2. **Capture the candidate source under the actual acquisition identity.**
+
+   ```sh
+   sudo -u cockpit-slurm env SLURM_BITSTR_LEN=0 \
+     scontrol --all --local show job --json
+   ```
+
+   Preserve the full output, command exit status, stderr, parser/plugin
+   version, and top-level `errors` and `warnings`. For every record, summarize
+   the configured cluster, `job_id`, numeric owner UID, account, partition,
+   source state/base-state/flags, array job/task set/value fields, and
+   `array_task_string`. Count records by owner UID, partition, and state. Note
+   malformed records, duplicate canonical identity tuples, missing required
+   fields, absent partitions, and any response-size or parser limits. Empty
+   `errors`/`warnings` or successful JSON parsing alone do not prove
+   completeness.
+
+3. **Compare against an independent Slurm view at the same time.**
+
+   Run the following queue query once as `cockpit-slurm` and once as an
+   independently authorized Slurm operator. Record which identity ran each
+   query; do not treat two commands run under the same identity as independent
+   authorization evidence.
+
+   ```sh
+   sudo -u cockpit-slurm squeue --all --local --array --states=all \
+     -h -o '%i|%A|%a|%u|%U|%T|%P|%R'
+   ```
+
+   ```sh
+   squeue --all --local --array --states=all \
+     -h -o '%i|%A|%a|%u|%U|%T|%P|%R'
+   ```
+
+   Reconcile the candidate source's active-record identity set with the
+   independent queue view using Job/array identity, owner UID, partition, and
+   state. Explain every mismatch, including ordinary Jobs, array elements,
+   placeholders, owners, partitions, and transition states. Confirm that each
+   required owner and each supported partition has representative records;
+   if the live queue lacks a required owner/state, record the gap rather than
+   claiming it was tested. If the installed `squeue` rejects `--states=all`,
+   retain that failure and obtain the exact supported equivalent from the
+   installed manual before repeating; do not silently narrow the comparison.
+
+4. **Check expression truncation and command failure behavior.**
+
+   With a currently visible long-expression array Job, compare these read-only
+   queries under the acquisition identity:
+
+   ```sh
+   sudo -u cockpit-slurm scontrol --all --local show job --json
+   sudo -u cockpit-slurm env SLURM_BITSTR_LEN=0 \
+     scontrol --all --local show job --json
+   ```
+
+   Compare the same record's complete array expression, not just JSON validity;
+   record exit status, stderr, `errors`, `warnings`, parser version, and
+   expression length for both. If no suitable array is present, this probe
+   remains open. Also record the response to a read-only invalid-ID probe:
+
+   ```sh
+   sudo -u cockpit-slurm scontrol show job not-a-job --json
+   ```
+
+   This checks invalid-identifier failure only. It does not simulate controller
+   failure, parser truncation, or service-cache behavior. Those failure paths
+   require separate Stage B tests; every failed, malformed, truncated,
+   ambiguous, or oversized snapshot must preserve the cache and emit no
+   removals.
+
+5. **Record the support boundary.**
+
+   The proposed support scope is this tested Slurm 25.05.7/parser
+   configuration and enumerated non-hidden partitions only. Explicitly record
+   the full partition inventory and confirm `PrivateData` does not prevent
+   complete acquisition. Hidden-partition deployments remain unsupported
+   unless separately verified and approved. Do not generalize this evidence
+   to other Slurm versions, parser versions, clusters, or authorization
+   configurations.
+
 ### Slurm 25.05 Documentation Review
 
 - The [Slurm 25.05.7 array documentation](https://slurm.schedmd.com/archive/slurm-25.05.7/job_array.html) states that zero is a valid task index; individual elements have a job ID and array-job/task IDs, and pending tasks can be represented by an aggregated record. These statements support the observed task-zero and placeholder examples, but do not by themselves define the JSON parser's zero/set sentinel semantics for normal Jobs.
 - The [Slurm 25.05.7 job-state documentation](https://slurm.schedmd.com/archive/slurm-25.05.7/job_state_codes.html) distinguishes base states from flags. It describes `PENDING`, `RUNNING`, and `SUSPENDED` as nonterminal base states, while flags such as `COMPLETING` and `REQUEUED` describe transitions. The repository's v0.0.43 OpenAPI `job_info.job_state` schema is an array whose enum includes both base-state and flag names. This schema is source-model evidence, not proof that the CLI JSON encodes every state/flag combination the same way.
-- Review decision needed: define exactly when a record with a terminal base state and a cleanup or requeue flag remains in the active collection, and how the selected CLI parser represents those combinations. Unknown, unsupported, or ambiguous state combinations must not be interpreted as authoritative removals. The samples establish only the observed `PENDING`, `RUNNING`, `COMPLETED`, `CANCELLED`, and `FAILED` forms; no transition-flag sample has been verified.
+- The proposal below defines conservative behavior for base states and transition flags, subject to owner review and source verification. The supplied CLI output establishes only the observed `PENDING`, `RUNNING`, `COMPLETED`, `CANCELLED`, and `FAILED` forms; no transition-flag sample has been verified. Unknown, unsupported, or ambiguous combinations must not be interpreted as authoritative removals.
 - The owner resolved the restricted-visibility ambiguity by approving independent, branch-specific fail-closed evaluation. The earlier running `visitor` Job 21 had a valid numeric owner but an empty account in the operator's `squeue` JSON; Stage B tests must verify that a valid direct-owner match remains visible while an empty account cannot establish coordinator-account access. They must also cover the inverse missing-owner/valid-coordinated-account case and denial when neither branch succeeds.
 - The [Slurm 25.05.7 scontrol manual](https://slurm.schedmd.com/archive/slurm-25.05.7/scontrol.html) documents `SLURM_BITSTR_LEN=0` and warns that larger expressions may affect performance. The Job 18 comparison corroborates this specific behavior for the installed source; it does not certify every possible incomplete or oversized response.
 - A read-only `scontrol --all --local show job not-a-job --json` probe as `dev` printed `scontrol_print_job error: Invalid job id specified` rather than a JSON document. This tests invalid identifier handling only; it does not establish the daemon identity's behavior on controller failure, the command's exit status in this record, or all acquisition-failure modes.
 
 ### Stream contract review
 
-- The Phase 4 and Phase 6 specifications describe a connection-wide sequence across Node and Job events, identity-only visibility removals, and close/reconnect recovery with fresh snapshots. The current Node implementation uses global collection generation and full-Node removal payloads, so this is a reviewed contract change to be implemented only after the Stage A gate.
-- The historical IPC protocol document explicitly gives the accepted Phase 4/5 specifications precedence and delegates exact stream payloads to Phase 4. Its event-ordering and recovery sections nevertheless still describe detecting missing global generations and show a `resync-required`/query example; those examples conflict with the Phase 4/6 connection-sequence and reconnect contract and are superseded under its stated precedence. Flag them for separately approved documentation cleanup; they do not authorize a second recovery protocol.
+- The accepted Phase 4 §§8–10 already define one connection-wide sequence shared across resource types; collection generation as separate authoritative cache metadata; visibility filtering before sequence allocation; no sequence consumption for hidden changes; identity-only visibility removal events; and reconnect with fresh snapshots as recovery. Phase 6 preserves this contract, brings the Node implementation into conformance, and applies the same mechanism to Job events. The current Node implementation's use of collection generation and full-Node removal payloads is an implementation gap, not an accepted-contract change.
+- Do not add application-level `subscribe`/`unsubscribe` messages, `subscriptionId`, or another recovery protocol. The historical [2.1 ipc-protocol.md](../architecture/2.1%20ipc-protocol.md) gives accepted Phase 4/5 specifications precedence, but its §22 snapshot example omits the Phase 4 sequence field; §37 and §§54–55 retain per-resource generation conflict/gap detection and a `resync-required`/query recovery example; and §§40, 66, and 67 retain subscription lifecycle/package/test concepts. These passages require separately approved documentation cleanup; they do not authorize another recovery mechanism. Phase 4 §8 also retains a protocol-vocabulary list containing `subscribe`, despite the automatic-stream contract. Include that wording in the separately approved consistency cleanup, not as an application message contract.
+
+### Active-state proposal for Slurm 25.05.7
+
+This is the proposed active-collection policy for the selected
+`data_parser/v0.0.43` source, not a claim that each state/flag combination has
+been observed or is ready for implementation.
+
+| Source combination | Proposed behavior | Evidence and status |
+| --- | --- | --- |
+| `PENDING` base, no transition flag | Include. | Observed in the supplied daemon-context held-array sample; Slurm documentation classifies it as nonterminal. |
+| `RUNNING` base, no transition flag | Include. | Observed in supplied daemon-context normal-Job and array-element samples; Slurm documentation classifies it as nonterminal. |
+| `SUSPENDED` base, no transition flag | Include. | Slurm documentation classifies it as nonterminal; not observed in supplied CLI output. |
+| Active base plus `CONFIGURING` | Include only if source output explicitly represents an unambiguous active base and recognized flag together. | Transition described by Slurm documentation, but no source combination observed; reject until verified. |
+| Active or terminal base plus `COMPLETING` | Include during cleanup only if source output explicitly represents an unambiguous base and recognized flag together. | Cleanup flag described by Slurm documentation, but no source combination observed; reject until verified. |
+| `COMPLETED`, `CANCELLED`, or `FAILED` base, with no recognized active transition | Exclude after a complete valid snapshot. | `COMPLETED` and `CANCELLED` were observed in daemon-context output; `FAILED` was observed only in a supplied `dev` query, not the daemon-context sample. Slurm documents all three as terminal. |
+| Active base plus `REQUEUED`, `REQUEUE_HOLD`, or `REQUEUE_FED` | Proposed include only when the base is explicitly active and the flag combination is recognized and unambiguous. | State/flag names appear in Slurm documentation/help, but no combination was observed; reject until verified. |
+| `SPECIAL_EXIT`, a requeue-related flag without an active base, or an unclassified flag on a terminal/cleanup base | Reject the entire refresh. | No supplied source output establishes these combinations or their encoding. |
+| Unknown base/flag, missing base needed to classify a flag, unsupported combination, or ambiguous representation | Reject the entire refresh; preserve cache and emit no removals. | Required fail-closed behavior. |
+
+Other unclassified flags include `STOPPED`, `RESIZING`, `SIGNALING`,
+`STAGE_OUT`, `POWER_UP_NODE`, `RESV_DEL_HOLD`, `REVOKED`, `LAUNCH_FAILED`,
+and `RECONFIG_FAIL`. Their treatment must not be inferred from their names.
 
 ### Proposed Extraction Plan
 
@@ -156,6 +312,10 @@ Stage A remains **in progress; not accepted**. The owner must review and explici
 
 ## Checks Run
 
+These are historical automated repository-check results from the prior Stage A
+run; they were not rerun for this documentation update. They do not represent
+live Slurm/service-runtime verification.
+
 | Check | Result |
 | --- | --- |
 | `go test ./...` | Passed. |
@@ -169,25 +329,30 @@ Stage A remains **in progress; not accepted**. The owner must review and explici
 | `npm run eslint` | Failed with 262 errors in `src/app.tsx`, `src/index.tsx`, `src/ipc/channel.ts`, `src/ipc/framing.test.ts`, `src/ipc/framing.ts`, and `src/ipc/node-query.ts`; this matches the prior Phase 5 Stage E count. |
 | `go test ./internal/command ./internal/ipc ./internal/ledger ./internal/authorization -list .` | Passed; inventoried existing regression cases. |
 
-No live mutation, service restart, production ledger modification, or service-account impersonation was performed.
+No live mutation, service restart, production ledger modification, or
+service-account impersonation was performed as part of the automated checks
+listed here. The read-only service-account source probes recorded above are
+separate operator-provided evidence.
 
 ## Outstanding Decisions and Evidence
 
-1. Review the remaining complete-snapshot evidence and limitations for the selected source under the backend data-acquisition OS/Slurm identity. Operator-provided snapshots show matching visibility of held arrays 18-20 across three owners in the `normal` partition, and a previous comparison showed two running array tasks; they do not prove complete enumeration. Confirm required fields, malformed/truncated response behavior, supported-version scope, and safe failure handling. On this single-partition cluster, hidden-partition behavior remains unverified and requires separate evidence before supporting a deployment that uses it.
+1. Execute the read-only `sms10` procedure above under the actual `cockpit-slurm` acquisition identity. Existing samples show held arrays 18–20 across three owners in the `normal` partition and a prior two-element array comparison; they do not prove complete enumeration across all required owners, supported partitions, or active states.
 2. Verify the approved source-specific normalization against the daemon-context normal-Job, array-placeholder, and individual-element samples, including task ID zero. The owner approved the observed zero/set classifier for v0.0.43; unknown, inconsistent, and ambiguous representations must reject the refresh. Do not generalize this approval to other parser versions.
-3. Review the documented Phase 6 stream contract and its evidence limitations. The owner approved the direction: all resource events on one IPC connection use a monotonically increasing connection sequence; hidden changes consume no sequence; revocation emits an identity-only removal; authorization-context changes reconcile the projection; and gaps recover through a new connection and fresh snapshots. Shared frontend validation across resource kinds precedes provider dispatch.
+3. Confirm that Phase 6 preserves, rather than changes, the accepted Phase 4 stream contract. It already specifies the shared connection sequence, independent collection generation, pre-sequence visibility filtering, identity-only removals, and fresh-snapshot recovery. The current Node implementation is not yet conformant.
 4. Confirm the query-policy mapping is explicit in the Phase 6 spec: `node.list` references `node.cluster`, and `job.list` references `job.active`; the referenced policy scopes are defined. Stage B must add validation tests that reject missing references, unknown policy identifiers, resource-kind mismatches, and enabled record-returning queries without references.
 5. Review the owner-approved Node-to-shared extraction direction against the ownership and ordering boundaries above. Reuse existing transport, connection initialization, authorization, command registry, and ledger mechanisms; preserve Phase 5 command behavior without speculative generic command abstractions.
 6. Account for the existing TypeScript and ESLint failures when planning the required Phase 6 acceptance checks; do not report those checks as passing or weaken security/tests to clear them.
 7. Test the approved independent missing-account/owner visibility branches in Stage B, including the observed empty-account case. Do not silently interpret an unresolved attribute as granting access.
-8. Review the active-state proposal in Phase 6 §6.1 and gather or explicitly review remaining transition-flag evidence. No `CONFIGURING`, `COMPLETING`, requeue, or other listed transition combination has been verified in the supplied CLI output; unsupported or ambiguous combinations must reject the refresh without removals.
+8. Review the explicit active-state table in Phase 6 §6.1 and gather source evidence for each proposed transition flag. The supplied CLI output establishes only the listed `PENDING`, `RUNNING`, `COMPLETED`, `CANCELLED`, and `FAILED` forms; it does not establish `SUSPENDED`, `CONFIGURING`, `COMPLETING`, requeue, or other flag combinations. Until verified and explicitly approved, unsupported or ambiguous combinations must reject the entire refresh without removals.
 
 ## Stage A Acceptance Criteria
 
 Stage A remains unaccepted until a reviewer records approval after verifying all of the following:
 
 - The per-connection event-sequence, visibility-projection, identity-only removal, authorization-context reconciliation, and fresh-snapshot recovery contract is documented and internally consistent with the accepted IPC transport and event envelope.
-- The active-Job source is selected and approved using completeness, parser, failure/truncation, visibility, and supported-version evidence from the approved backend data-acquisition identity.
+- The Phase 4 stream contract is preserved; Phase 6 does not introduce a new sequence or recovery contract.
+- The active-Job source is selected and approved using completeness, independent-view comparison, parser, failure/truncation, visibility, and supported-version/partition-scope evidence from the approved backend data-acquisition identity. Hidden-partition deployments are explicitly excluded unless separately verified and approved.
+- Automated repository test results are distinguished from live Slurm/service-runtime evidence; failed checks are not reported as passed.
 - Representative normal and array Jobs from that source establish the source-specific identity normalization rule. Normal canonical Jobs have both array identifiers absent; valid array task ID zero remains representable.
 - The IPC requester, daemon data-acquisition identity, and any privileged-helper identity are separately identified and verified for their respective boundaries.
 - The exact `node.list` → `node.cluster` and `job.list` → `job.active` visibility-policy references and role scopes are documented; Stage B includes required reference-validation tests.
