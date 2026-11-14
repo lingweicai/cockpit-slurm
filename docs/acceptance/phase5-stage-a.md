@@ -38,3 +38,7 @@ Based on this recorded evidence, the Stage A exit criterion requiring target-ins
 The transport regression covers framed command dispatch and Node event delivery on one connection, correlated responses, stream cleanup, and bounded-queue overflow. No command execution or mutation UI is enabled by this record.
 
 Stage A is explicitly marked passed.
+
+## Version 3.7 Reassessment — 2026-11-14
+
+The historical Stage A decision and evidence above are retained unchanged. For the v3.7 Phase 5 gate, the recorded session-to-capture association remains operator-reported; the peer-credential trace alone does not independently establish the authenticated browser identity. The v3.7 requirement is to validate the complete authenticated Cockpit user → `SO_PEERCRED` UID/GID → Linux user → requester `UserContext` mapping on the target installation for representative users, and to demonstrate that the daemon's own Linux identity is not treated as the requester. Until that evidence is recorded, the v3.7 identity-mapping gate remains open; mutation commands and frontend mutation controls must remain unavailable under the v3.7 specification. This note does not invalidate or rewrite the earlier Stage A result.

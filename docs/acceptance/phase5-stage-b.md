@@ -34,3 +34,7 @@ Stage B is explicitly marked passed based on the recorded protocol and authoriza
 - Capability request/response dispatch and correlation on the authenticated connection path were implemented and tested.
 
 These results satisfy the Stage B exit criteria for protocol and authorization contracts, while Stage D command execution remains gated by Stage C/D sequencing.
+
+## Version 3.7 Reassessment — 2026-11-14
+
+The historical Stage B decision and test results are retained unchanged. The repository's `config/authorization/operations.yaml` is the authoritative authorization policy for v3.7; its `node.drain` and `node.resume` entries currently use `slurm_admin_level_admin`, with the corresponding `nodes.drain` and `nodes.resume` capabilities. This record establishes the earlier registry and capability tests, but does not by itself establish that the runtime policy loader/registry is sourced from or validated against `operations.yaml` as required by v3.7. Record that verification and any policy-loader tests separately before treating Stage B as v3.7-verified. The observed `devel` association is an observation from the recorded lookup, not a prerequisite for SlurmDB `AdminLevel=Administrator`.
